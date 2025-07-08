@@ -33,6 +33,22 @@ services:
       timeout: 5s
       retries: 5
 
+  fastapi:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/lexextract
+      - DEBUG=True
+      - ENVIRONMENT=development
+    volumes:
+      - ./uploads:/var/app/data/uploads
+      - ./exports:/var/app/data/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   postgres_test_data: 
