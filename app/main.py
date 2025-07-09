@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import os
 from dotenv import load_dotenv
 
-from .db import get_db, engine, Base
+from .db import get_db
 
 # Load environment variables
 load_dotenv()
@@ -25,11 +25,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-async def startup_event():
-    """Create database tables on startup"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+# Database tables are now managed by Alembic migrations
+# Run: alembic upgrade head
 
 @app.get("/health")
 async def health_check():

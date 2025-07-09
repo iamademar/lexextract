@@ -44,6 +44,10 @@ services:
     volumes:
       - ./uploads:/var/app/data/uploads
       - ./exports:/var/app/data/exports
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+      - ./tests:/app/tests
+      - ./app:/app/app
     depends_on:
       postgres:
         condition: service_healthy

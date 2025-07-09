@@ -39,6 +39,36 @@ A standalone, secure web application for UK law firms to upload PDF bank stateme
    curl http://localhost:8000/health
    ```
 
+## 🔄 Development Workflow
+
+Follow this workflow when making database schema changes:
+
+1. **Start databases and apply migrations**
+   ```bash
+   ./scripts/setup_db.sh
+   ```
+
+2. **Make model changes**
+   ```bash
+   # Edit your SQLAlchemy models
+   vim app/models.py
+   ```
+
+3. **Generate migration**
+   ```bash
+   docker-compose run --rm fastapi alembic revision --autogenerate -m "description"
+   ```
+
+4. **Apply migration**
+   ```bash
+   docker-compose run --rm fastapi alembic upgrade head
+   ```
+
+5. **Test your changes**
+   ```bash
+   docker-compose run --rm fastapi pytest
+   ```
+
 ## 📋 Quick Commands
 
 ### Docker Management
@@ -102,6 +132,18 @@ docker-compose exec fastapi bash
 
 # View container resources
 docker stats
+
+# Check current status
+docker-compose run --rm fastapi alembic current
+
+# Create new migration
+docker-compose run --rm fastapi alembic revision --autogenerate -m "description"
+
+# Apply migrations
+docker-compose run --rm fastapi alembic upgrade head
+
+# Show history
+docker-compose run --rm fastapi alembic history
 ```
 
 ## 🌐 Access Points

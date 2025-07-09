@@ -1,13 +1,32 @@
 import pytest
+import pytest_asyncio
 import os
+import sys
+import asyncio
+from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
+from alembic.config import Config
+from alembic import command
+
+# Add the project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 # Import models to ensure they're registered with Base
 from app.models import Client, Statement, Transaction, Base
 
 
-@pytest.fixture
+def get_alembic_config():
+    """Get Alembic configuration for testing"""
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    config = Config(str(alembic_ini_path))
+    return config
+
+
+@pytest_asyncio.fixture
 async def async_engine():
     """Create an async engine for testing with PostgreSQL test database"""
     # Override DATABASE_URL for testing
@@ -16,7 +35,7 @@ async def async_engine():
     
     engine = create_async_engine(test_db_url, echo=True)
     
-    # Create all tables
+    # Create all tables using SQLAlchemy metadata (simpler for testing)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
