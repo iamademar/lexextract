@@ -29,8 +29,16 @@ def get_alembic_config():
 @pytest_asyncio.fixture
 async def async_engine():
     """Create an async engine for testing with PostgreSQL test database"""
+    # Check if we're running inside Docker container
+    if os.path.exists('/.dockerenv'):
+        # Running inside Docker container - use service name
+        default_test_db_url = "postgresql+asyncpg://postgres:password@postgres_test:5432/lexextract_test"
+    else:
+        # Running locally - use localhost with exposed port
+        default_test_db_url = "postgresql+asyncpg://postgres:password@localhost:5433/lexextract_test"
+    
     # Override DATABASE_URL for testing
-    test_db_url = os.getenv("TEST_DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost:5433/lexextract_test")
+    test_db_url = os.getenv("TEST_DATABASE_URL", default_test_db_url)
     os.environ["DATABASE_URL"] = test_db_url
     
     engine = create_async_engine(test_db_url, echo=True)
