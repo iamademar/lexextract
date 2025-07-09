@@ -32,6 +32,13 @@ until docker-compose exec postgres_test pg_isready -U postgres >/dev/null 2>&1; 
 done
 
 echo "✅ PostgreSQL databases are ready!"
+
+# Run database migrations
+echo ""
+echo "🔄 Running database migrations..."
+docker-compose run --rm fastapi alembic upgrade head
+echo "✅ Database migrations completed!"
+
 echo ""
 echo "📋 Database Information:"
 echo "  Main Database: postgresql://postgres:password@localhost:5432/lexextract"
@@ -40,6 +47,24 @@ echo ""
 echo "🔧 Environment Variables:"
 echo "  export DATABASE_URL='postgresql+asyncpg://postgres:password@localhost:5432/lexextract'"
 echo "  export TEST_DATABASE_URL='postgresql+asyncpg://postgres:password@localhost:5433/lexextract_test'"
+echo ""
+echo "🗃️ Migration Commands:"
+echo "  # Check current migration status:"
+echo "  docker-compose run --rm fastapi alembic current"
+echo ""
+echo "  # Create new migration:"
+echo "  docker-compose run --rm fastapi alembic revision --autogenerate -m 'description'"
+echo ""
+echo "  # Upgrade to latest migration:"
+echo "  docker-compose run --rm fastapi alembic upgrade head"
+echo ""
+echo "  # Downgrade to previous migration:"
+echo "  docker-compose run --rm fastapi alembic downgrade -1"
+echo ""
+echo "  # Using the Python migration script:"
+echo "  docker-compose run --rm fastapi python scripts/migrate.py current"
+echo "  docker-compose run --rm fastapi python scripts/migrate.py upgrade"
+echo "  docker-compose run --rm fastapi python scripts/migrate.py create 'migration description'"
 echo ""
 echo "🧪 To run tests:"
 echo "  python -m pytest tests/"
