@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 # Initialize PaddleOCR (will be cached after first use)
 ocr = None
 
+# Memory-efficient processing limits
+MAX_PIXMAP_WIDTH = 1200  # Much more conservative maximum width
+MAX_PIXMAP_HEIGHT = 1200  # Much more conservative maximum height  
+MAX_PIXMAP_SAMPLES = 4_000_000  # Much more conservative maximum samples
+
 def get_ocr_instance():
     """Get a singleton instance of PaddleOCR"""
     global ocr
@@ -30,9 +35,30 @@ def get_ocr_instance():
             raise
     return ocr
 
+def calculate_safe_matrix(page_rect, max_width=MAX_PIXMAP_WIDTH, max_height=MAX_PIXMAP_HEIGHT):
+    """Calculate a safe zoom matrix that won't exceed memory limits"""
+    page_width = page_rect.width
+    page_height = page_rect.height
+    
+    # Calculate zoom factors to fit within limits
+    zoom_x = max_width / page_width if page_width > max_width else 1.5
+    zoom_y = max_height / page_height if page_height > max_height else 1.5
+    
+    # Use the smaller zoom to ensure both dimensions fit, cap at 1.5x
+    zoom = min(zoom_x, zoom_y, 1.5)  # Conservative cap at 1.5x zoom
+    
+    # Extra safety: ensure resulting dimensions won't be too large
+    resulting_width = page_width * zoom
+    resulting_height = page_height * zoom
+    if resulting_width > max_width or resulting_height > max_height:
+        zoom = min(max_width / page_width, max_height / page_height)
+    
+    logger.info(f"Page size: {page_width:.1f}x{page_height:.1f}, calculated zoom: {zoom:.2f}")
+    return fitz.Matrix(zoom, zoom)
+
 async def run_ocr(file_path: str) -> List[str]:
     """
-    Extract text from PDF using OCR.
+    Extract text from PDF using OCR with memory-efficient processing.
     
     Args:
         file_path: Path to the PDF file to process
@@ -63,10 +89,25 @@ async def run_ocr(file_path: str) -> List[str]:
             try:
                 # Get page
                 page = pdf_document[page_num]
+                page_rect = page.rect
                 
-                # Convert page to image
-                matrix = fitz.Matrix(2.0, 2.0)  # 2x zoom for better quality
+                # Calculate safe zoom matrix to prevent memory issues
+                matrix = calculate_safe_matrix(page_rect)
+                
+                # Convert page to image with safe matrix
                 pix = page.get_pixmap(matrix=matrix)
+                
+                # Check if pixmap is too large (ensure samples is treated as int)
+                samples_count = len(pix.samples) if hasattr(pix.samples, '__len__') else pix.samples
+                if samples_count > MAX_PIXMAP_SAMPLES:
+                    logger.warning(f"Page {page_num + 1} pixmap too large ({samples_count} samples), using lower resolution")
+                    # Use even lower resolution for very large pages
+                    safe_zoom = min(1.0, MAX_PIXMAP_SAMPLES / (page_rect.width * page_rect.height * 3))
+                    matrix = fitz.Matrix(safe_zoom, safe_zoom)
+                    pix = page.get_pixmap(matrix=matrix)
+                    samples_count = len(pix.samples) if hasattr(pix.samples, '__len__') else pix.samples
+                
+                logger.info(f"Page {page_num + 1} pixmap: {pix.width}x{pix.height}, samples: {samples_count}")
                 
                 # Convert to PIL Image
                 img_data = pix.tobytes("png")
@@ -75,9 +116,17 @@ async def run_ocr(file_path: str) -> List[str]:
                 # Convert PIL Image to numpy array for PaddleOCR
                 img_array = np.array(img)
                 
+                # Clean up pixmap memory
+                pix = None
+                
                 # Run OCR on the image
-                logger.info(f"Running OCR on page {page_num + 1} image array shape: {img_array.shape}")
+                logger.info(f"Running OCR on page {page_num + 1}")
                 ocr_result = ocr_instance.ocr(img_array)
+                
+                # Clean up image memory
+                img = None
+                img_array = None
+                
                 logger.info(f"OCR result type: {type(ocr_result)}, length: {len(ocr_result) if ocr_result else 'None'}")
                 
                 # Extract text from OCR result
@@ -92,8 +141,6 @@ async def run_ocr(file_path: str) -> List[str]:
                         
                         logger.info(f"Processing {len(texts)} OCR text results")
                         for text, confidence in zip(texts, scores):
-                            logger.info(f"OCR line: '{text}' (confidence: {confidence:.3f})")
-                            
                             # Use lower threshold to capture more text
                             if confidence > 0.1:  # Very low threshold to capture more text
                                 page_text += text + " "
@@ -106,8 +153,6 @@ async def run_ocr(file_path: str) -> List[str]:
                                 text = line[1][0] if line[1] else ""
                                 confidence = line[1][1] if line[1] and len(line[1]) > 1 else 0
                                 
-                                logger.info(f"OCR line: '{text}' (confidence: {confidence})")
-                                
                                 # Use lower threshold to capture more text
                                 if confidence > 0.1:
                                     page_text += text + " "
@@ -117,7 +162,7 @@ async def run_ocr(file_path: str) -> List[str]:
                     logger.warning(f"No OCR results found for page {page_num + 1}")
                 
                 page_texts.append(page_text.strip())
-                logger.info(f"Processed page {page_num + 1}/{len(pdf_document)}")
+                logger.info(f"Processed page {page_num + 1}/{len(pdf_document)}, extracted {len(page_text)} characters")
                 
             except Exception as e:
                 logger.error(f"Error processing page {page_num + 1}: {e}")
