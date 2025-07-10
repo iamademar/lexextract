@@ -3,15 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import os
+import logging
 from dotenv import load_dotenv
 from datetime import datetime
 import shutil
 
 from .db import get_db
 from .models import Statement, Client
+from .services.ocr import run_ocr
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Create FastAPI instance
 app = FastAPI(
@@ -84,17 +90,34 @@ async def upload_statement(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
+    # Process PDF with OCR
+    try:
+        logger.info(f"Starting OCR processing for file: {file_path}")
+        ocr_results = await run_ocr(file_path)
+        logger.info(f"OCR processing completed. Extracted {len(ocr_results)} pages")
+    except Exception as e:
+        logger.error(f"OCR processing failed: {e}")
+        # Remove the uploaded file if OCR fails
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
+    
     # Create Statement record in database
     statement = Statement(
         client_id=client_id,  # Use the provided client_id parameter
-        file_path=file_path
+        file_path=file_path,
+        ocr_text="\n".join(ocr_results)  # Store all pages as joined text
     )
     
     db.add(statement)
     await db.commit()
     await db.refresh(statement)
     
-    return {"statement_id": statement.id}
+    return {
+        "statement_id": statement.id,
+        "pages_processed": len(ocr_results),
+        "ocr_preview": ocr_results[0][:200] + "..." if ocr_results and len(ocr_results[0]) > 200 else ocr_results[0] if ocr_results else ""
+    }
 
 # Add your API routes here as you develop them
 # from .routes import auth, upload, chat, history
