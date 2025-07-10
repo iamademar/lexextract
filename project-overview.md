@@ -119,10 +119,10 @@ DELETE /uploads/{id}            → Delete PDF, CSV, history
 
 ## 6. Demo Scope & Samples
 
-* **Sample PDFs:** 3–5 publicly available statement formats (e.g., HSBC, Barclays)
+* **Sample PDFs:** 3–5 publicly available statement formats
 * **Sample queries:**
 
-  1. "What’s the total paid to Barclays in June 2025?"
+  1. "What’s the total paid in June 2025?"
   2. "List all transactions on 15/05/2025 over £500"
   3. "Show me a CSV of all debit entries"
 * **CSV fields:** Date (YYYY-MM-DD), Payee, Amount (decimal), Type (Debit/Credit), Running Balance, Currency (ISO code)
@@ -137,4 +137,3 @@ DELETE /uploads/{id}            → Delete PDF, CSV, history
 * Test reports + sample CSVs
 * Manual deployment instructions (bash scripts)
 
-Please review and let me know if any adjustments are needed! 🎯

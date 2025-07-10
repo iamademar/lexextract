@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Date, Numeric
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Date, Numeric, Text
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -22,6 +22,7 @@ class Statement(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     file_path = Column(String, nullable=False)
+    ocr_text = Column(Text, nullable=True)  # Store extracted OCR text
     
     client = relationship("Client", backref="statements")
 

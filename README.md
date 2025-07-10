@@ -39,6 +39,39 @@ A standalone, secure web application for UK law firms to upload PDF bank stateme
    curl http://localhost:8000/health
    ```
 
+## 🔍 OCR Implementation
+
+### PaddleOCR Integration
+LexExtract uses **PaddleOCR** for robust PDF text extraction with memory-efficient processing:
+
+- **Multi-format support**: Handles various PDF layouts and formats
+- **Memory optimization**: Intelligent zoom scaling prevents out-of-memory crashes
+- **Quality preservation**: Maintains text extraction accuracy while managing resources
+- **Error handling**: Graceful fallback for corrupted or problematic files
+
+### Memory-Efficient Processing
+Key optimizations implemented:
+
+- **Dynamic zoom calculation**: Automatically scales large pages to safe processing limits
+- **Pixmap size limits**: Prevents excessive memory usage during image conversion  
+- **Progressive fallback**: Reduces resolution for oversized documents while preserving readability
+- **Memory cleanup**: Explicit resource management for large image processing
+
+### Usage Example
+```bash
+# Upload and process a PDF statement
+curl -X POST "http://localhost:8000/upload/statement?client_id=1" \
+     -H "Content-Type: multipart/form-data" \
+     -F "file=@bank-statement.pdf"
+
+# Response includes OCR results
+{
+  "statement_id": 123,
+  "pages_processed": 2,
+  "ocr_preview": "Your Bank Account Statement..."
+}
+```
+
 ## 🔄 Development Workflow
 
 Follow this workflow when making database schema changes:
@@ -164,14 +197,28 @@ LexExtract/
 │   ├── __init__.py
 │   ├── main.py            # FastAPI app entry point
 │   ├── db.py              # Database configuration
-│   └── models.py          # SQLAlchemy models
+│   ├── models.py          # SQLAlchemy models
+│   └── services/          # Business logic services
+│       ├── __init__.py
+│       └── ocr.py         # OCR processing with PaddleOCR
+├── alembic/               # Database migrations
+│   ├── env.py
+│   └── versions/          # Migration files
 ├── scripts/               # Setup and utility scripts
-├── tests/                 # Test files
-├── uploads/               # PDF file uploads (mounted volume)
-├── exports/               # CSV exports (mounted volume)
+│   └── setup_db.sh       # Database initialization
+├── tests/                 # Comprehensive test suite
+│   ├── test_upload_with_ocr.py  # Upload & OCR integration tests
+│   ├── test_db.py         # Database tests
+│   ├── test_imports.py    # Import verification
+│   └── sample_data/       # Test PDF files
+├── data/                  # Docker volume mounts
+│   ├── uploads/           # PDF file uploads
+│   └── exports/           # CSV exports (planned)
 ├── docker-compose.yml     # Docker services configuration
 ├── Dockerfile            # FastAPI container definition
 ├── requirements.txt      # Python dependencies
+├── pytest.ini           # Test configuration
+├── alembic.ini           # Database migration config
 └── .env                  # Environment variables
 ```
 
@@ -201,6 +248,15 @@ UPLOAD_DIR=/var/app/data/uploads
 EXPORT_DIR=/var/app/data/exports
 ```
 
+### Dependencies
+Key Python packages included:
+- **FastAPI** - Web framework and API
+- **SQLAlchemy** - Database ORM with async support
+- **PaddleOCR** - OCR processing engine
+- **PyMuPDF** - PDF manipulation and image extraction
+- **PostgreSQL drivers** - Database connectivity
+- **Pytest** - Testing framework with async support
+
 ## 🗄️ Database Schema
 
 The application uses three main tables:
@@ -211,29 +267,57 @@ The application uses three main tables:
 
 ## 🧪 Testing
 
+### Test Suite Overview
+The application includes a comprehensive test suite covering:
+
+- **Upload & OCR Integration**: Real PDF processing with memory-efficient OCR
+- **Database Operations**: Statement storage and client validation  
+- **Error Handling**: Invalid files, large files, corrupted PDFs
+- **Input Validation**: MIME types, file sizes, client verification
+
+### Running Tests
+
 ```bash
-# Run all tests
+# Run all tests (17 tests total)
 docker-compose exec fastapi pytest
 
 # Run with coverage
 docker-compose exec fastapi pytest --cov=app
 
-# Run specific test file
-docker-compose exec fastapi pytest tests/test_db.py
+# Run specific test categories
+docker-compose exec fastapi pytest tests/test_upload_with_ocr.py  # OCR & Upload tests
+docker-compose exec fastapi pytest tests/test_db.py              # Database tests
+docker-compose exec fastapi pytest tests/test_imports.py         # Import tests
 ```
 
-## 📊 API Endpoints (Planned)
+### Test Files
+- **`test_upload_with_ocr.py`**: Comprehensive upload endpoint testing with real OCR
+- **`test_db.py`**: Database functionality and model tests  
+- **`test_imports.py`**: Basic import verification
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/` | Root endpoint |
-| GET | `/health` | Health check |
-| POST | `/auth/login` | User authentication |
-| POST | `/upload/statement` | Upload PDF statement |
-| POST | `/process/statement` | Process PDF with OCR |
-| GET | `/download/csv/{id}` | Download CSV export |
-| POST | `/chat/message` | Chat with AI about statements |
-| GET | `/history/sessions` | List chat sessions |
+### OCR Test Coverage
+Tests include memory-efficient processing of different PDF formats:
+- ✅ `bank-statement-1.pdf` (2 pages) - Previously problematic, now working
+- ✅ `bank-statement-2.pdf` (1 page) - Standard processing
+- ✅ Error scenarios (corrupted files, invalid formats)
+- ✅ Memory efficiency (large PDFs without crashes)
+
+## 📊 API Endpoints
+
+### Implemented
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|---------|
+| GET | `/` | Root endpoint | ✅ Working |
+| GET | `/health` | Health check | ✅ Working |
+| POST | `/upload/statement?client_id={id}` | Upload PDF statement with OCR processing | ✅ Working |
+
+### Planned
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|---------|
+| POST | `/auth/login` | User authentication | ⏳ Planned |
+| GET | `/download/csv/{id}` | Download CSV export | ⏳ Planned |
+| POST | `/chat/message` | Chat with AI about statements | ⏳ Planned |
+| GET | `/history/sessions` | List chat sessions | ⏳ Planned |
 
 ## 🔒 Security Features
 
@@ -245,23 +329,20 @@ docker-compose exec fastapi pytest tests/test_db.py
 
 ## 🚧 Development Status
 
-This is a 2-week MVP demo build. Current status:
+Current status:
 
 - ✅ Docker containerization
 - ✅ Database setup and models
 - ✅ FastAPI application foundation
-- ⏳ File upload endpoints
-- ⏳ OCR processing pipeline
+- ✅ File upload endpoints
+- ✅ OCR processing pipeline (PaddleOCR with memory-efficient processing)
+- ✅ Comprehensive test suite
 - ⏳ Chat interface
 - ⏳ Authentication system
 
 ## 📝 License
 
 Proprietary license - All rights reserved.
-
-## 🤝 Support
-
-For development questions or issues, please contact the development team.
 
 ---
 
