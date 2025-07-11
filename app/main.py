@@ -9,8 +9,9 @@ from datetime import datetime
 import shutil
 
 from .db import get_db
-from .models import Statement, Client
+from .models import Statement, Client, Transaction
 from .services.ocr import run_ocr
+from .services.parser import parse_transactions, run_extraction, run_structure_extraction
 
 # Load environment variables
 load_dotenv()
@@ -90,19 +91,39 @@ async def upload_statement(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    # Process PDF with OCR
+    # Process PDF with structure analysis first, then fallback to current method
     try:
-        logger.info(f"Starting OCR processing for file: {file_path}")
-        ocr_results = await run_ocr(file_path)
-        logger.info(f"OCR processing completed. Extracted {len(ocr_results)} pages")
+        logger.info(f"Starting structure analysis for file: {file_path}")
+        transactions_data = await run_structure_extraction(file_path)
+        logger.info(f"Structure analysis completed. Found {len(transactions_data)} transactions")
+        
+        # For database storage, also get OCR text for backup/reference
+        ocr_results = []
+        try:
+            ocr_results = await run_ocr(file_path)
+            logger.info(f"OCR backup completed. Extracted {len(ocr_results)} pages")
+        except Exception as ocr_error:
+            logger.warning(f"OCR backup failed: {ocr_error}")
+            ocr_results = ["Structure analysis used - OCR backup not available"]
+            
     except Exception as e:
-        logger.error(f"OCR processing failed: {e}")
-        # Remove the uploaded file if OCR fails
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
+        logger.warning(f"Structure analysis failed: {e}, falling back to current method")
+        try:
+            # Fall back to current extraction method
+            transactions_data = await run_extraction(file_path)
+            logger.info(f"Fallback extraction completed. Found {len(transactions_data)} transactions")
+            
+            # Get OCR text
+            ocr_results = await run_ocr(file_path)
+            logger.info(f"OCR completed. Extracted {len(ocr_results)} pages")
+        except Exception as fallback_error:
+            logger.error(f"Both structure analysis and fallback extraction failed: {fallback_error}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise HTTPException(status_code=500, detail=f"All extraction methods failed: {str(fallback_error)}")
     
-    # Create Statement record in database
+    # Create Statement and Transaction records in database
+    # Use a single transaction to ensure data consistency
     statement = Statement(
         client_id=client_id,  # Use the provided client_id parameter
         file_path=file_path,
@@ -110,12 +131,47 @@ async def upload_statement(
     )
     
     db.add(statement)
-    await db.commit()
+    await db.flush()  # Flush to get the statement ID without committing
+    
+    # Create Transaction records in the same transaction
+    created_transactions = []
+    if transactions_data:
+        try:
+            for trans_data in transactions_data:
+                transaction = Transaction(
+                    statement_id=statement.id,
+                    date=trans_data['date'].date() if hasattr(trans_data['date'], 'date') else trans_data['date'],
+                    payee=trans_data['description'],  # Updated key name
+                    amount=trans_data['amount'],
+                    type=trans_data['type'],
+                    balance=trans_data.get('balance'),  # Use .get() in case balance is None
+                    currency=trans_data.get('currency', 'USD')  # Default currency if not specified
+                )
+                db.add(transaction)
+                created_transactions.append(transaction)
+            
+            logger.info(f"Created {len(created_transactions)} transaction objects, committing to database...")
+        except Exception as e:
+            logger.error(f"Failed to create transaction objects: {e}")
+            # Continue without transactions
+    
+    # Commit everything together (Statement + Transactions)
+    try:
+        await db.commit()
+        logger.info(f"Successfully saved Statement {statement.id} with {len(created_transactions)} transactions")
+    except Exception as e:
+        logger.error(f"Failed to save to database: {e}")
+        await db.rollback()
+        # If commit fails, we still have the statement object in memory
+        raise HTTPException(status_code=500, detail=f"Database save failed: {str(e)}")
+    
     await db.refresh(statement)
     
     return {
         "statement_id": statement.id,
         "pages_processed": len(ocr_results),
+        "transactions_found": len(transactions_data),
+        "transactions_saved": len(created_transactions),
         "ocr_preview": ocr_results[0][:200] + "..." if ocr_results and len(ocr_results[0]) > 200 else ocr_results[0] if ocr_results else ""
     }
 
