@@ -91,11 +91,21 @@ async def upload_statement(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    # Process PDF with structure analysis first, then fallback to current method
+    # Process PDF with structure analysis first, then fallback to regex parsing if needed
     try:
         logger.info(f"Starting structure analysis for file: {file_path}")
         transactions_data = await run_structure_extraction(file_path)
         logger.info(f"Structure analysis completed. Found {len(transactions_data)} transactions")
+        
+        # If structure analysis found no transactions, fall back to regex-based parsing
+        if not transactions_data:
+            logger.info("No transactions found in structure analysis, falling back to regex-based extraction")
+            try:
+                transactions_data = await run_extraction(file_path)
+                logger.info(f"Regex-based extraction completed. Found {len(transactions_data)} transactions")
+            except Exception as regex_error:
+                logger.warning(f"Regex-based extraction also failed: {regex_error}")
+                transactions_data = []
         
         # For database storage, also get OCR text for backup/reference
         ocr_results = []
@@ -107,7 +117,7 @@ async def upload_statement(
             ocr_results = ["Structure analysis used - OCR backup not available"]
             
     except Exception as e:
-        logger.warning(f"Structure analysis failed: {e}, falling back to current method")
+        logger.warning(f"Structure analysis failed: {e}, falling back to regex-based extraction")
         try:
             # Fall back to current extraction method
             transactions_data = await run_extraction(file_path)
@@ -117,7 +127,7 @@ async def upload_statement(
             ocr_results = await run_ocr(file_path)
             logger.info(f"OCR completed. Extracted {len(ocr_results)} pages")
         except Exception as fallback_error:
-            logger.error(f"Both structure analysis and fallback extraction failed: {fallback_error}")
+            logger.error(f"Both structure analysis and regex extraction failed: {fallback_error}")
             if os.path.exists(file_path):
                 os.remove(file_path)
             raise HTTPException(status_code=500, detail=f"All extraction methods failed: {str(fallback_error)}")

@@ -55,6 +55,42 @@ class TransactionData(BaseModel):
         return v
 
 
+def parse_date(date_str: str) -> datetime:
+    """
+    Parse date string with robust handling of 2- or 4-digit years.
+    
+    Args:
+        date_str: Date string in format MM/DD or MM/DD/YY(YY)
+        
+    Returns:
+        datetime object
+    """
+    # Detect optional year, normalize "24"→2024, else default to today's year
+    if re.match(r'\d{1,2}/\d{1,2}/\d{2,4}$', date_str):
+        month, day, year = map(int, date_str.split('/'))
+        if year < 100:
+            year += 2000
+    else:
+        month, day = map(int, date_str.split('/'))
+        year = datetime.now().year
+    return datetime(year, month, day)
+
+
+def parse_mmdd_to_date(date_str: str, statement_year: int) -> datetime:
+    """
+    Parse MM/DD format dates to a specific statement year.
+    
+    Args:
+        date_str: Date string in MM/DD format
+        statement_year: Year to use for the parsed date
+        
+    Returns:
+        datetime object with the specified year
+    """
+    month, day = map(int, date_str.split('/'))
+    return datetime(statement_year, month, day)
+
+
 def parse_transactions(pages: List[str]) -> List[TransactionData]:
     """
     Extract structured transaction data from OCR pages using regex patterns.
@@ -108,14 +144,14 @@ def _parse_standard_us_format(text: str) -> List[TransactionData]:
     # Look for transaction patterns with dates
     date_pattern = r'(\d{1,2}/\d{1,2})\s+'
     
-    # Pattern for transaction lines
+    # Pattern for transaction lines - tightened to be non-greedy
     transaction_patterns = [
         # Pattern 1: Date Description Amount Balance (debit transactions)
-        r'(\d{1,2}/\d{1,2})\s+(.*?)\s+(\d+\.\d{2})\s+(\d+\.\d{2})',
+        r'(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+(.+?)\s+(\d+\.\d{2})\s+(\d+\.\d{2})',
         # Pattern 2: Date Description Credit Amount Balance  
-        r'(\d{1,2}/\d{1,2})\s+(.*?)\s+(\d+\.\d{2})\s+(\d+\.\d{2})',
+        r'(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+(.+?)\s+(\d+\.\d{2})\s+(\d+\.\d{2})',
         # Pattern 3: Simple date amount pattern
-        r'(\d{1,2}/\d{1,2})\s+(.*?)\s+(\d+\.\d{2})'
+        r'(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+(.+?)\s+(\d+\.\d{2})'
     ]
     
     # Split into lines and process each
@@ -135,10 +171,8 @@ def _parse_standard_us_format(text: str) -> List[TransactionData]:
                     description = match.group(2).strip()
                     amount_str = match.group(3)
                     
-                    # Parse date (assume current year if not specified)
-                    current_year = datetime.now().year
-                    month, day = map(int, date_str.split('/'))
-                    trans_date = datetime(current_year, month, day)
+                    # Parse date with robust year handling
+                    trans_date = parse_date(date_str)
                     
                     # Parse amount
                     amount = Decimal(amount_str)
@@ -181,12 +215,12 @@ def _parse_uk_format(text: str) -> List[TransactionData]:
     """Parse transactions from UK bank statement format"""
     transactions = []
     
-    # UK date patterns: DD/MM/YYYY or DD-MM-YYYY
+    # UK date patterns: DD/MM/YYYY or DD-MM-YYYY - tightened to be non-greedy
     uk_patterns = [
         # Pattern for UK format: DD/MM Description Amount Balance
-        r'(\d{1,2}/\d{1,2}/\d{4}|\d{1,2}/\d{1,2})\s+(.*?)\s+£?(\d+\.\d{2})\s*£?(\d+\.\d{2})?',
+        r'(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+(.+?)\s+£?(\d+\.\d{2})\s*£?(\d+\.\d{2})?',
         # Pattern for DD-MM format
-        r'(\d{1,2}-\d{1,2}-\d{4}|\d{1,2}-\d{1,2})\s+(.*?)\s+£?(\d+\.\d{2})\s*£?(\d+\.\d{2})?'
+        r'(\d{1,2}-\d{1,2}(?:-\d{2,4})?)\s+(.+?)\s+£?(\d+\.\d{2})\s*£?(\d+\.\d{2})?'
     ]
     
     lines = text.split('\n')
