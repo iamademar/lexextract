@@ -12,7 +12,6 @@ from app.services.tesseract_ocr import (
     extract_tables_with_tesseract_pipeline,
     _parse_page_specification,
     _convert_page_to_image,
-    _try_camelot_on_image,
     _extract_tables_with_region_detection,
     _ocr_table_image,
     _reconstruct_table_from_ocr_data,
@@ -88,80 +87,7 @@ class TestTesseractOCR:
         with pytest.raises(Exception, match="Conversion failed"):
             _convert_page_to_image(mock_page)
 
-    @patch('app.services.tesseract_ocr.camelot')
-    @patch('app.services.tesseract_ocr.tempfile')
-    @patch('app.services.tesseract_ocr.os')
-    def test_try_camelot_on_image_success(self, mock_os, mock_tempfile, mock_camelot):
-        """Test successful camelot table extraction from image."""
-        # Mock tempfile
-        mock_tmp_file = Mock()
-        mock_tmp_file.name = "/tmp/test.png"
-        mock_tempfile.NamedTemporaryFile.return_value.__enter__.return_value = mock_tmp_file
-        
-        # Mock camelot
-        mock_table = Mock()
-        mock_df = pd.DataFrame({'A': [1, 2], 'B': [3, 4]})
-        mock_table.df = mock_df
-        mock_camelot.read_pdf.return_value = [mock_table]
-        
-        # Mock os.path.exists and os.unlink
-        mock_os.path.exists.return_value = True
-        
-        # Mock image
-        mock_image = Mock()
-        
-        result = _try_camelot_on_image(mock_image, page_num=1, edge_tol=200)
-        
-        assert len(result) == 1
-        assert isinstance(result[0], pd.DataFrame)
-        assert result[0].equals(mock_df)
-        mock_image.save.assert_called_once_with("/tmp/test.png", format='PNG')
 
-    @patch('app.services.tesseract_ocr.camelot')
-    @patch('app.services.tesseract_ocr.tempfile')
-    @patch('app.services.tesseract_ocr.os')
-    def test_try_camelot_on_image_no_tables(self, mock_os, mock_tempfile, mock_camelot):
-        """Test camelot finding no tables."""
-        # Mock tempfile
-        mock_tmp_file = Mock()
-        mock_tmp_file.name = "/tmp/test.png"
-        mock_tempfile.NamedTemporaryFile.return_value.__enter__.return_value = mock_tmp_file
-        
-        # Mock camelot returning no tables
-        mock_camelot.read_pdf.return_value = []
-        
-        # Mock os.path.exists and os.unlink
-        mock_os.path.exists.return_value = True
-        
-        # Mock image
-        mock_image = Mock()
-        
-        result = _try_camelot_on_image(mock_image, page_num=1, edge_tol=200)
-        
-        assert result == []
-
-    @patch('app.services.tesseract_ocr.camelot')
-    @patch('app.services.tesseract_ocr.tempfile')
-    @patch('app.services.tesseract_ocr.os')
-    def test_try_camelot_on_image_exception(self, mock_os, mock_tempfile, mock_camelot):
-        """Test camelot processing exception."""
-        # Mock tempfile
-        mock_tmp_file = Mock()
-        mock_tmp_file.name = "/tmp/test.png"
-        mock_tempfile.NamedTemporaryFile.return_value.__enter__.return_value = mock_tmp_file
-        
-        # Mock camelot exception
-        mock_camelot.read_pdf.side_effect = Exception("Camelot failed")
-        
-        # Mock os.path.exists and os.unlink
-        mock_os.path.exists.return_value = True
-        
-        # Mock image
-        mock_image = Mock()
-        
-        result = _try_camelot_on_image(mock_image, page_num=1, edge_tol=200)
-        
-        assert result == []
 
     def test_reconstruct_table_from_ocr_data_success(self):
         """Test successful table reconstruction from OCR data."""
@@ -237,12 +163,11 @@ class TestTesseractOCR:
 
     @patch('app.services.tesseract_ocr.pdfplumber')
     @patch('app.services.tesseract_ocr._convert_page_to_image')
-    @patch('app.services.tesseract_ocr._try_camelot_on_image')
     @patch('app.services.tesseract_ocr._extract_tables_with_region_detection')
-    def test_extract_tables_with_tesseract_pipeline_camelot_success(
-        self, mock_region_detection, mock_camelot, mock_convert, mock_pdfplumber
+    def test_extract_tables_with_tesseract_pipeline_region_detection_success(
+        self, mock_region_detection, mock_convert, mock_pdfplumber
     ):
-        """Test pipeline when camelot succeeds."""
+        """Test pipeline using region detection (camelot step removed)."""
         # Mock PDF file existence
         with patch('app.services.tesseract_ocr.Path.exists', return_value=True):
             # Mock pdfplumber
@@ -254,41 +179,6 @@ class TestTesseractOCR:
             # Mock image conversion
             mock_image = Mock()
             mock_convert.return_value = mock_image
-            
-            # Mock camelot success
-            mock_df = pd.DataFrame({'A': [1, 2], 'B': [3, 4]})
-            mock_camelot.return_value = [mock_df]
-            
-            result = extract_tables_with_tesseract_pipeline(self.sample_pdf_path)
-            
-            assert len(result) == 1
-            assert isinstance(result[0], pd.DataFrame)
-            assert result[0].equals(mock_df)
-            # Region detection should not be called since camelot succeeded
-            mock_region_detection.assert_not_called()
-
-    @patch('app.services.tesseract_ocr.pdfplumber')
-    @patch('app.services.tesseract_ocr._convert_page_to_image')
-    @patch('app.services.tesseract_ocr._try_camelot_on_image')
-    @patch('app.services.tesseract_ocr._extract_tables_with_region_detection')
-    def test_extract_tables_with_tesseract_pipeline_fallback_to_region_detection(
-        self, mock_region_detection, mock_camelot, mock_convert, mock_pdfplumber
-    ):
-        """Test pipeline fallback to region detection when camelot fails."""
-        # Mock PDF file existence
-        with patch('app.services.tesseract_ocr.Path.exists', return_value=True):
-            # Mock pdfplumber
-            mock_page = Mock()
-            mock_pdf = Mock()
-            mock_pdf.pages = [mock_page]
-            mock_pdfplumber.open.return_value.__enter__.return_value = mock_pdf
-            
-            # Mock image conversion
-            mock_image = Mock()
-            mock_convert.return_value = mock_image
-            
-            # Mock camelot failure
-            mock_camelot.return_value = []
             
             # Mock region detection success
             mock_df = pd.DataFrame({'A': [1, 2], 'B': [3, 4]})
@@ -299,16 +189,48 @@ class TestTesseractOCR:
             assert len(result) == 1
             assert isinstance(result[0], pd.DataFrame)
             assert result[0].equals(mock_df)
-            # Both should be called
-            mock_camelot.assert_called_once()
+            # Region detection should be called
             mock_region_detection.assert_called_once()
 
     @patch('app.services.tesseract_ocr.pdfplumber')
     @patch('app.services.tesseract_ocr._convert_page_to_image')
-    @patch('app.services.tesseract_ocr._try_camelot_on_image')
+    @patch('app.services.tesseract_ocr._extract_tables_with_region_detection')
+    def test_extract_tables_with_tesseract_pipeline_region_detection_with_multiple_tables(
+        self, mock_region_detection, mock_convert, mock_pdfplumber
+    ):
+        """Test pipeline with multiple tables found by region detection."""
+        # Mock PDF file existence
+        with patch('app.services.tesseract_ocr.Path.exists', return_value=True):
+            # Mock pdfplumber
+            mock_page = Mock()
+            mock_pdf = Mock()
+            mock_pdf.pages = [mock_page]
+            mock_pdfplumber.open.return_value.__enter__.return_value = mock_pdf
+            
+            # Mock image conversion
+            mock_image = Mock()
+            mock_convert.return_value = mock_image
+            
+            # Mock region detection success with multiple tables
+            mock_df1 = pd.DataFrame({'A': [1, 2], 'B': [3, 4]})
+            mock_df2 = pd.DataFrame({'C': [5, 6], 'D': [7, 8]})
+            mock_region_detection.return_value = [mock_df1, mock_df2]
+            
+            result = extract_tables_with_tesseract_pipeline(self.sample_pdf_path)
+            
+            assert len(result) == 2
+            assert isinstance(result[0], pd.DataFrame)
+            assert isinstance(result[1], pd.DataFrame)
+            assert result[0].equals(mock_df1)
+            assert result[1].equals(mock_df2)
+            # Region detection should be called
+            mock_region_detection.assert_called_once()
+
+    @patch('app.services.tesseract_ocr.pdfplumber')
+    @patch('app.services.tesseract_ocr._convert_page_to_image')
     @patch('app.services.tesseract_ocr._extract_tables_with_region_detection')
     def test_extract_tables_with_tesseract_pipeline_no_tables_found(
-        self, mock_region_detection, mock_camelot, mock_convert, mock_pdfplumber
+        self, mock_region_detection, mock_convert, mock_pdfplumber
     ):
         """Test pipeline when no tables are found."""
         # Mock PDF file existence
@@ -323,14 +245,12 @@ class TestTesseractOCR:
             mock_image = Mock()
             mock_convert.return_value = mock_image
             
-            # Mock both failing
-            mock_camelot.return_value = []
+            # Mock region detection finding no tables
             mock_region_detection.return_value = []
             
             result = extract_tables_with_tesseract_pipeline(self.sample_pdf_path)
             
             assert result == []
-            mock_camelot.assert_called_once()
             mock_region_detection.assert_called_once()
 
     @patch('app.services.tesseract_ocr.extract_tables_with_tesseract_pipeline')

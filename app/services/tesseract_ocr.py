@@ -66,24 +66,18 @@ def extract_tables_with_tesseract_pipeline(pdf_path: str, pages: str = 'all',
                 # Convert page to PNG image
                 page_image = _convert_page_to_image(page, resolution=300)
                 
-                # Try camelot on the image first
-                camelot_tables = _try_camelot_on_image(page_image, page_num, edge_tol)
+                # Use table region detection + pytesseract OCR
+                # Note: Camelot cannot process image files, so we skip that step
+                logger.info(f"Using region detection for scanned page {page_num}")
+                tesseract_tables = _extract_tables_with_region_detection(
+                    page, page_image, page_num, min_confidence
+                )
                 
-                if camelot_tables:
-                    logger.info(f"Camelot found {len(camelot_tables)} tables on page {page_num}")
-                    all_dataframes.extend(camelot_tables)
+                if tesseract_tables:
+                    logger.info(f"Region detection found {len(tesseract_tables)} tables on page {page_num}")
+                    all_dataframes.extend(tesseract_tables)
                 else:
-                    # Fallback to table region detection + pytesseract OCR
-                    logger.info(f"Camelot found no tables on page {page_num}, falling back to region detection")
-                    tesseract_tables = _extract_tables_with_region_detection(
-                        page, page_image, page_num, min_confidence
-                    )
-                    
-                    if tesseract_tables:
-                        logger.info(f"Region detection found {len(tesseract_tables)} tables on page {page_num}")
-                        all_dataframes.extend(tesseract_tables)
-                    else:
-                        logger.info(f"No tables found on page {page_num}")
+                    logger.info(f"No tables found on page {page_num}")
         
         logger.info(f"Total tables extracted: {len(all_dataframes)}")
         return all_dataframes
@@ -144,51 +138,7 @@ def _convert_page_to_image(page, resolution: int = 300) -> Image.Image:
         raise
 
 
-def _try_camelot_on_image(page_image: Image.Image, page_num: int, edge_tol: int) -> List[pd.DataFrame]:
-    """
-    Try to extract tables using camelot on the converted image.
-    
-    Args:
-        page_image: PIL Image of the page
-        page_num: Page number for logging
-        edge_tol: Edge tolerance for camelot lattice detection
-        
-    Returns:
-        List of DataFrames if successful, empty list if no tables found
-    """
-    try:
-        # Save image to temporary file for camelot processing
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-            temp_image_path = tmp_file.name
-            page_image.save(temp_image_path, format='PNG')
-        
-        try:
-            # Try camelot lattice on the image
-            logger.debug(f"Trying camelot lattice on page {page_num} image")
-            tables = camelot.read_pdf(temp_image_path, pages='1', flavor='lattice', edge_tol=edge_tol)
-            
-            if len(tables) > 0:
-                logger.info(f"Camelot extracted {len(tables)} tables from page {page_num}")
-                dataframes = []
-                for i, table in enumerate(tables):
-                    df = table.df
-                    if not df.empty:
-                        logger.info(f"Table {i+1}: {df.shape[0]} rows, {df.shape[1]} columns")
-                        dataframes.append(df)
-                
-                return dataframes
-            else:
-                logger.debug(f"Camelot found no tables on page {page_num}")
-                return []
-                
-        finally:
-            # Clean up temporary file
-            if os.path.exists(temp_image_path):
-                os.unlink(temp_image_path)
-    
-    except Exception as e:
-        logger.debug(f"Camelot processing failed on page {page_num}: {e}")
-        return []
+
 
 
 def _extract_tables_with_region_detection(page, page_image: Image.Image, page_num: int, 
