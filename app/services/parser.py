@@ -883,7 +883,7 @@ async def run_extraction(file_path: str) -> List[Dict[str, Any]]:
 
 async def run_structure_extraction(file_path: str) -> List[Dict[str, Any]]:
     """
-    Extract transactions using PaddleOCR structure analysis.
+    Extract transactions using unified OCR structure analysis (Tesseract + Camelot).
     
     Args:
         file_path: Path to the PDF file to process
@@ -929,7 +929,7 @@ async def run_structure_extraction(file_path: str) -> List[Dict[str, Any]]:
 
 def parse_structure_tables(structure_results: List[Dict[str, Any]]) -> List[TransactionData]:
     """
-    Parse transactions from PaddleOCR structure analysis results.
+    Parse transactions from unified OCR structure analysis results (Tesseract + Camelot).
     
     Args:
         structure_results: Structure analysis results containing tables
