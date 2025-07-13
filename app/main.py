@@ -91,53 +91,64 @@ async def upload_statement(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    # Process PDF with structure analysis first, then fallback to regex parsing if needed
+    # Process PDF with unified OCR pipeline and enhanced transaction parsing
     try:
-        logger.info(f"Starting structure analysis for file: {file_path}")
-        transactions_data = await run_structure_extraction(file_path)
-        logger.info(f"Structure analysis completed. Found {len(transactions_data)} transactions")
+        logger.info(f"Starting unified OCR processing for file: {file_path}")
         
-        # If structure analysis found no transactions, fall back to regex-based parsing
-        if not transactions_data:
-            logger.info("No transactions found in structure analysis, falling back to regex-based extraction")
-            try:
-                transactions_data = await run_extraction(file_path)
-                logger.info(f"Regex-based extraction completed. Found {len(transactions_data)} transactions")
-            except Exception as regex_error:
-                logger.warning(f"Regex-based extraction also failed: {regex_error}")
-                transactions_data = []
+        # Use the unified OCR pipeline that combines Camelot + Tesseract intelligently
+        from .services.ocr import run_unified_ocr_pipeline
+        ocr_results = run_unified_ocr_pipeline(file_path)
+        logger.info(f"Unified OCR completed. Processed {len(ocr_results)} pages")
         
-        # For database storage, also get OCR text for backup/reference
-        ocr_results = []
-        try:
-            ocr_results = await run_ocr(file_path)
-            logger.info(f"OCR backup completed. Extracted {len(ocr_results)} pages")
-        except Exception as ocr_error:
-            logger.warning(f"OCR backup failed: {ocr_error}")
-            ocr_results = ["Structure analysis used - OCR backup not available"]
-            
+        # Use the enhanced parser that handles multiple formats
+        transactions_data = parse_transactions(ocr_results)
+        logger.info(f"Enhanced parsing completed. Found {len(transactions_data)} transactions")
+        
+        # Convert TransactionData objects to dictionaries for database storage
+        transactions_dicts = []
+        for trans in transactions_data:
+            transaction_dict = {
+                'date': trans.date,
+                'description': trans.payee,
+                'amount': trans.amount,
+                'balance': trans.balance,
+                'type': trans.type,
+                'currency': trans.currency
+            }
+            transactions_dicts.append(transaction_dict)
+        
+        # Get OCR text for backup/reference
+        ocr_text_pages = [page_result.get('full_text', '') for page_result in ocr_results]
+        
     except Exception as e:
-        logger.warning(f"Structure analysis failed: {e}, falling back to regex-based extraction")
+        logger.error(f"Unified OCR processing failed: {e}")
+        logger.info("Falling back to legacy extraction methods")
+        
         try:
-            # Fall back to current extraction method
-            transactions_data = await run_extraction(file_path)
-            logger.info(f"Fallback extraction completed. Found {len(transactions_data)} transactions")
+            # Fallback to structure analysis first
+            transactions_dicts = await run_structure_extraction(file_path)
+            logger.info(f"Structure analysis fallback completed. Found {len(transactions_dicts)} transactions")
             
-            # Get OCR text
-            ocr_results = await run_ocr(file_path)
-            logger.info(f"OCR completed. Extracted {len(ocr_results)} pages")
+            # If structure analysis found no transactions, fall back to regex-based parsing
+            if not transactions_dicts:
+                logger.info("No transactions found in structure analysis, falling back to regex-based extraction")
+                transactions_dicts = await run_extraction(file_path)
+                logger.info(f"Regex-based extraction completed. Found {len(transactions_dicts)} transactions")
+            
+            # Get OCR text for backup
+            ocr_text_pages = await run_ocr(file_path)
+            logger.info(f"OCR backup completed. Extracted {len(ocr_text_pages)} pages")
         except Exception as fallback_error:
-            logger.error(f"Both structure analysis and regex extraction failed: {fallback_error}")
+            logger.error(f"All extraction methods failed: {fallback_error}")
             if os.path.exists(file_path):
                 os.remove(file_path)
             raise HTTPException(status_code=500, detail=f"All extraction methods failed: {str(fallback_error)}")
     
     # Create Statement and Transaction records in database
-    # Use a single transaction to ensure data consistency
     statement = Statement(
-        client_id=client_id,  # Use the provided client_id parameter
+        client_id=client_id,
         file_path=file_path,
-        ocr_text="\n".join(ocr_results)  # Store all pages as joined text
+        ocr_text="\n".join(ocr_text_pages) if ocr_text_pages else ""
     )
     
     db.add(statement)
@@ -145,17 +156,17 @@ async def upload_statement(
     
     # Create Transaction records in the same transaction
     created_transactions = []
-    if transactions_data:
+    if transactions_dicts:
         try:
-            for trans_data in transactions_data:
+            for trans_data in transactions_dicts:
                 transaction = Transaction(
                     statement_id=statement.id,
                     date=trans_data['date'].date() if hasattr(trans_data['date'], 'date') else trans_data['date'],
-                    payee=trans_data['description'],  # Updated key name
+                    payee=trans_data['description'],
                     amount=trans_data['amount'],
                     type=trans_data['type'],
-                    balance=trans_data.get('balance'),  # Use .get() in case balance is None
-                    currency=trans_data.get('currency', 'USD')  # Default currency if not specified
+                    balance=trans_data.get('balance'),
+                    currency=trans_data.get('currency', 'USD')
                 )
                 db.add(transaction)
                 created_transactions.append(transaction)
@@ -172,17 +183,16 @@ async def upload_statement(
     except Exception as e:
         logger.error(f"Failed to save to database: {e}")
         await db.rollback()
-        # If commit fails, we still have the statement object in memory
         raise HTTPException(status_code=500, detail=f"Database save failed: {str(e)}")
     
     await db.refresh(statement)
     
     return {
         "statement_id": statement.id,
-        "pages_processed": len(ocr_results),
-        "transactions_found": len(transactions_data),
+        "pages_processed": len(ocr_text_pages) if ocr_text_pages else 0,
+        "transactions_found": len(transactions_dicts),
         "transactions_saved": len(created_transactions),
-        "ocr_preview": ocr_results[0][:200] + "..." if ocr_results and len(ocr_results[0]) > 200 else ocr_results[0] if ocr_results else ""
+        "ocr_preview": ocr_text_pages[0][:200] + "..." if ocr_text_pages and len(ocr_text_pages[0]) > 200 else ocr_text_pages[0] if ocr_text_pages else ""
     }
 
 # Add your API routes here as you develop them

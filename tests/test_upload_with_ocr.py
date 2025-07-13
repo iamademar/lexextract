@@ -328,7 +328,7 @@ class TestUploadWithOCR:
         
         # Should return 500 due to OCR processing failure
         assert response.status_code == 500
-        assert "OCR processing failed" in response.json()["detail"]
+        assert "All extraction methods failed" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_upload_creates_directory(self, setup_database):

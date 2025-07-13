@@ -57,23 +57,70 @@ class TransactionData(BaseModel):
 
 def parse_date(date_str: str) -> datetime:
     """
-    Parse date string with robust handling of 2- or 4-digit years.
+    Parse date string with robust handling of various formats.
     
     Args:
-        date_str: Date string in format MM/DD or MM/DD/YY(YY)
+        date_str: Date string in various formats
         
     Returns:
         datetime object
     """
-    # Detect optional year, normalize "24"→2024, else default to today's year
-    if re.match(r'\d{1,2}/\d{1,2}/\d{2,4}$', date_str):
-        month, day, year = map(int, date_str.split('/'))
-        if year < 100:
-            year += 2000
-    else:
-        month, day = map(int, date_str.split('/'))
-        year = datetime.now().year
-    return datetime(year, month, day)
+    if not date_str or not date_str.strip():
+        raise ValueError("Empty date string")
+    
+    date_str = date_str.strip()
+    
+    # Try different date formats
+    date_formats = [
+        # US formats
+        '%m/%d/%Y',      # 10/15/2024
+        '%m/%d/%y',      # 10/15/24
+        '%m/%d',         # 10/15 (current year)
+        # UK formats
+        '%d/%m/%Y',      # 15/10/2024
+        '%d/%m/%y',      # 15/10/24
+        '%d/%m',         # 15/10 (current year)
+        # Date with month name
+        '%d %B %Y',      # 15 October 2024
+        '%d %B',         # 15 October (current year)
+        '%d %b %Y',      # 15 Oct 2024
+        '%d %b',         # 15 Oct (current year)
+        # Compact formats
+        '%d%b',          # 19Jan
+        '%d%B',          # 19January
+        # ISO format
+        '%Y-%m-%d',      # 2024-10-15
+    ]
+    
+    for date_format in date_formats:
+        try:
+            parsed_date = datetime.strptime(date_str, date_format)
+            # If no year specified, use current year
+            if parsed_date.year == 1900:
+                parsed_date = parsed_date.replace(year=datetime.now().year)
+            return parsed_date
+        except ValueError:
+            continue
+    
+    # Handle special cases like "1 February" or "19Jan"
+    # Try to parse month names with day
+    month_names = {
+        'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
+        'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6, 'july': 7, 'jul': 7,
+        'august': 8, 'aug': 8, 'september': 9, 'sep': 9, 'october': 10, 'oct': 10,
+        'november': 11, 'nov': 11, 'december': 12, 'dec': 12
+    }
+    
+    # Try to extract day and month from formats like "1 February" or "19Jan"
+    for month_name, month_num in month_names.items():
+        if month_name.lower() in date_str.lower():
+            # Extract day number
+            day_match = re.search(r'(\d+)', date_str)
+            if day_match:
+                day = int(day_match.group(1))
+                return datetime(datetime.now().year, month_num, day)
+    
+    raise ValueError(f"Unable to parse date: {date_str}")
 
 
 def parse_mmdd_to_date(date_str: str, statement_year: int) -> datetime:
@@ -91,43 +138,81 @@ def parse_mmdd_to_date(date_str: str, statement_year: int) -> datetime:
     return datetime(statement_year, month, day)
 
 
-def parse_transactions(pages: List[str]) -> List[TransactionData]:
+def parse_transactions(ocr_output: List[dict]) -> List[TransactionData]:
     """
-    Extract structured transaction data from OCR pages using regex patterns.
+    Extract structured transaction data from unified OCR output.
     
     Args:
-        pages: List of OCR text strings, one for each page
+        ocr_output: List of dictionaries from unified OCR pipeline with 'page', 'tables', 'full_text'
         
     Returns:
         List of TransactionData objects representing parsed transactions
     """
-    if not pages:
-        logger.warning("No pages provided for parsing")
+    if not ocr_output:
+        logger.warning("No OCR output provided for parsing")
         return []
 
     transactions = []
     
-    for page_num, page_text in enumerate(pages):
-        if not page_text or not page_text.strip():
-            logger.warning(f"Empty page {page_num + 1}, skipping")
+    for page_result in ocr_output:
+        if not isinstance(page_result, dict):
+            logger.warning(f"Invalid page result format: {type(page_result)}")
             continue
             
-        logger.info(f"Parsing transactions from page {page_num + 1}")
+        page_num = page_result.get('page', 'unknown')
+        tables = page_result.get('tables', [])
+        full_text = page_result.get('full_text', '')
         
-        # Try different bank statement formats
+        logger.info(f"Processing page {page_num}: {len(tables)} tables, {len(full_text)} characters")
+        
         page_transactions = []
         
-        # Format 1: Standard US bank format (from sample data)
-        page_transactions.extend(_parse_standard_us_format(page_text))
+        # Try table extraction first if tables are available
+        if tables:
+            logger.info(f"Attempting table extraction for page {page_num}")
+            for table_idx, table in enumerate(tables):
+                if table and len(table) > 1:  # Need at least header + 1 data row
+                    table_transactions = _extract_table_transactions(table)
+                    
+                    # Convert dictionaries to TransactionData objects
+                    for trans_dict in table_transactions:
+                        try:
+                            transaction = TransactionData(
+                                date=trans_dict['date'],
+                                payee=trans_dict['description'],
+                                amount=trans_dict['amount'],
+                                type=trans_dict['type'],
+                                balance=trans_dict.get('balance'),
+                                currency=trans_dict.get('currency', 'USD')
+                            )
+                            page_transactions.append(transaction)
+                        except Exception as e:
+                            logger.error(f"Error creating TransactionData from table: {e}")
+                            continue
+                    
+                    logger.info(f"Table {table_idx} on page {page_num} yielded {len(table_transactions)} transactions")
         
-        # Format 2: UK bank format (common patterns)
-        page_transactions.extend(_parse_uk_format(page_text))
+        # If no transactions from tables, try text parsing
+        if not page_transactions and full_text:
+            logger.info(f"Attempting text parsing for page {page_num}")
+            
+            # Try different bank statement formats
+            page_transactions.extend(_parse_standard_us_format(full_text))
+            page_transactions.extend(_parse_uk_format(full_text))
+            page_transactions.extend(_parse_detailed_uk_format(full_text))  # New format for bank-statement-2
+            page_transactions.extend(_parse_compact_format(full_text))      # New format for bank-statement-4
+            
+            logger.info(f"Text parsing on page {page_num} yielded {len(page_transactions)} transactions")
         
         if page_transactions:
-            logger.info(f"Found {len(page_transactions)} transactions on page {page_num + 1}")
             transactions.extend(page_transactions)
+            logger.info(f"Page {page_num} total: {len(page_transactions)} transactions")
         else:
-            logger.warning(f"No transactions found on page {page_num + 1}")
+            logger.warning(f"No transactions found on page {page_num}")
+            # Log a sample of the text for debugging
+            if full_text:
+                sample_text = full_text[:200] + "..." if len(full_text) > 200 else full_text
+                logger.debug(f"Sample text from page {page_num}: {sample_text}")
     
     logger.info(f"Total transactions parsed: {len(transactions)}")
     return transactions
@@ -290,20 +375,182 @@ def _parse_uk_format(text: str) -> List[TransactionData]:
     return transactions
 
 
+def _parse_detailed_uk_format(text: str) -> List[TransactionData]:
+    """Parse transactions from detailed UK format (like bank-statement-2.pdf)"""
+    transactions = []
+    
+    # This format has lines like:
+    # "1 February Card payment - High St Petrol Station 24.50 39,975.50"
+    # "4 February YourJob BiWeekly Payment 2,575.00 42,500.50"
+    
+    # Pattern to match: Date Description Amount Balance
+    # Where date is like "1 February" or "16 February"
+    # Amount could be debit or credit
+    patterns = [
+        # Format: "Date Description Amount Balance"
+        r'(\d{1,2} \w+)\s+(.+?)\s+([£$€]?\d{1,3}(?:,\d{3})*\.?\d{0,2})\s+([£$€]?\d{1,3}(?:,\d{3})*\.?\d{0,2})',
+        # Alternative format with more flexible spacing
+        r'(\d{1,2} \w+)\s+(.+?)\s+([£$€]?\d+(?:,\d{3})*\.?\d{0,2})\s+([£$€]?\d+(?:,\d{3})*\.?\d{0,2})',
+    ]
+    
+    lines = text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if match:
+                try:
+                    date_str = match.group(1)
+                    description = match.group(2).strip()
+                    amount_str = match.group(3)
+                    balance_str = match.group(4)
+                    
+                    # Skip if description is too short or looks like a header
+                    if len(description) < 3 or description.lower() in ['description', 'balance', 'amount']:
+                        continue
+                    
+                    # Parse date
+                    trans_date = parse_date(date_str)
+                    
+                    # Parse amount and balance
+                    amount = Decimal(_normalize_numeric_string(amount_str))
+                    balance = Decimal(_normalize_numeric_string(balance_str))
+                    
+                    # Determine transaction type based on description
+                    trans_type = _determine_transaction_type(description)
+                    
+                    # For debits, make amount negative
+                    if trans_type == 'Debit':
+                        amount = -amount
+                    
+                    transaction = TransactionData(
+                        date=trans_date,
+                        payee=description,
+                        amount=amount,
+                        type=trans_type,
+                        balance=balance,
+                        currency="GBP"  # UK format typically uses GBP
+                    )
+                    
+                    transactions.append(transaction)
+                    break  # Found a match, move to next line
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing detailed UK transaction from line: {line}, error: {e}")
+                    continue
+    
+    return transactions
+
+
+def _parse_compact_format(text: str) -> List[TransactionData]:
+    """Parse transactions from compact format (like bank-statement-4.pdf)"""
+    transactions = []
+    
+    # This format has lines like:
+    # "19Jan Woolworths 47.80 952.20"
+    # "23Jan Credit wage 1,550.21 2,118.70"
+    # Format: Date Transaction [Debit] [Credit] Balance
+    
+    # Pattern to match transactions
+    patterns = [
+        # Format: "Date Description Amount Balance" (single amount)
+        r'(\d{1,2}[A-Za-z]{3})\s+(.+?)\s+([£$€]?\d{1,3}(?:,\d{3})*\.?\d{0,2})\s+([£$€]?\d{1,3}(?:,\d{3})*\.?\d{0,2})',
+        # Format: "Date Description Debit Credit Balance" (where one of debit/credit is empty)
+        r'(\d{1,2}[A-Za-z]{3})\s+(.+?)\s+([£$€]?\d+(?:,\d{3})*\.?\d{0,2})\s+([£$€]?\d+(?:,\d{3})*\.?\d{0,2})',
+    ]
+    
+    lines = text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if match:
+                try:
+                    date_str = match.group(1)
+                    description = match.group(2).strip()
+                    amount_str = match.group(3)
+                    balance_str = match.group(4)
+                    
+                    # Skip if description is too short or looks like a header
+                    if len(description) < 3 or description.lower() in ['transaction', 'description', 'balance', 'debit', 'credit']:
+                        continue
+                    
+                    # Parse date
+                    trans_date = parse_date(date_str)
+                    
+                    # Parse amount and balance
+                    amount = Decimal(_normalize_numeric_string(amount_str))
+                    balance = Decimal(_normalize_numeric_string(balance_str))
+                    
+                    # Determine transaction type based on description
+                    trans_type = _determine_transaction_type(description)
+                    
+                    # For debits, make amount negative
+                    if trans_type == 'Debit':
+                        amount = -amount
+                    
+                    transaction = TransactionData(
+                        date=trans_date,
+                        payee=description,
+                        amount=amount,
+                        type=trans_type,
+                        balance=balance,
+                        currency="USD"  # Assuming USD for this format
+                    )
+                    
+                    transactions.append(transaction)
+                    break  # Found a match, move to next line
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing compact transaction from line: {line}, error: {e}")
+                    continue
+    
+    return transactions
+
+
 def _determine_transaction_type(description: str) -> str:
     """Determine if transaction is Credit or Debit based on description"""
     description_lower = description.lower()
     
-    # Credit indicators
-    credit_keywords = [
-        'credit', 'deposit', 'interest', 'payroll', 'preauthorized credit',
-        'refund', 'salary', 'pension', 'benefit', 'transfer in'
+    # Strong debit indicators (checked first to avoid conflicts)
+    strong_debit_keywords = [
+        'card payment', 'pos purchase', 'atm withdrawal', 'cash withdrawal', 
+        'direct debit', 'service charge', 'monthly rent', 'cash wdl'
     ]
     
-    # Debit indicators  
+    # Strong credit indicators (checked first to avoid conflicts)
+    strong_credit_keywords = [
+        'preauthorized credit', 'interest credit', 'salary credit', 'payroll deposit',
+        'biweekly payment', 'direct deposit', 'credit wage', 'wage credit'
+    ]
+    
+    # Check strong indicators first
+    for keyword in strong_debit_keywords:
+        if keyword in description_lower:
+            return 'Debit'
+    
+    for keyword in strong_credit_keywords:
+        if keyword in description_lower:
+            return 'Credit'
+    
+    # Regular credit indicators
+    credit_keywords = [
+        'credit', 'deposit', 'interest', 'payroll', 'refund', 'salary', 
+        'pension', 'benefit', 'transfer in', 'wage'
+    ]
+    
+    # Regular debit indicators  
     debit_keywords = [
         'purchase', 'pos', 'withdrawal', 'atm', 'check', 'payment',
-        'debit', 'fee', 'charge', 'service charge', 'transfer out'
+        'debit', 'fee', 'charge', 'transfer out', 'wdl'
     ]
     
     # Check for credit keywords
@@ -566,10 +813,13 @@ async def run_extraction(file_path: str) -> List[Dict[str, Any]]:
                             if page_num < len(ocr_results):
                                 page_text = ocr_results[page_num]
                                 
-                                # Parse using existing regex parsers
-                                page_transactions = []
-                                page_transactions.extend(_parse_standard_us_format(page_text))
-                                page_transactions.extend(_parse_uk_format(page_text))
+                                # Parse using unified format
+                                ocr_unified_format = [{
+                                    'page': page_num + 1,
+                                    'tables': [],
+                                    'full_text': page_text
+                                }]
+                                page_transactions = parse_transactions(ocr_unified_format)
                                 
                                 # Convert TransactionData objects to dictionaries
                                 for trans in page_transactions:
@@ -593,7 +843,16 @@ async def run_extraction(file_path: str) -> List[Dict[str, Any]]:
             # Full fallback to OCR + regex parsing
             try:
                 ocr_results = await run_ocr(file_path)
-                parsed_transactions = parse_transactions(ocr_results)
+                # Convert old format to new format for parse_transactions
+                ocr_unified_format = []
+                for page_num, page_text in enumerate(ocr_results, 1):
+                    ocr_unified_format.append({
+                        'page': page_num,
+                        'tables': [],
+                        'full_text': page_text
+                    })
+                
+                parsed_transactions = parse_transactions(ocr_unified_format)
                 
                 # Convert TransactionData objects to dictionaries
                 for trans in parsed_transactions:

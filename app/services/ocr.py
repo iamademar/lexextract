@@ -99,114 +99,179 @@ async def run_structure_analysis(file_path: str) -> List[Dict[str, Any]]:
         raise Exception(f"Structure analysis failed: {str(e)}")
 
 
-def run_unified_ocr_pipeline(pdf_path: str) -> List[Dict[str, Any]]:
+def run_unified_ocr_pipeline(pdf_path: str, retry_on_failure: bool = True) -> List[Dict[str, Any]]:
     """
     Unified OCR pipeline that intelligently routes to Camelot or Tesseract based on page type.
+    Enhanced with retry strategy and confidence validation.
     
     Args:
         pdf_path: Path to the PDF file to process
+        retry_on_failure: Whether to retry with alternative methods on failure
         
     Returns:
-        List of dictionaries with 'page', 'tables', and 'full_text' keys
+        List of dictionaries with 'page', 'tables', 'full_text' keys
     """
     try:
         logger.info(f"Starting unified OCR pipeline for: {pdf_path}")
         
         results = []
+        extraction_stats = {
+            'total_pages': 0,
+            'camelot_pages': 0,
+            'tesseract_pages': 0,
+            'failed_pages': 0,
+            'retry_attempts': 0
+        }
         
         with pdfplumber.open(pdf_path) as pdf:
             total_pages = len(pdf.pages)
+            extraction_stats['total_pages'] = total_pages
             logger.info(f"Processing {total_pages} pages")
             
             for page_no in range(1, total_pages + 1):
                 logger.info(f"Processing page {page_no}/{total_pages}")
                 
-                # Determine if this is a text page or scanned page
-                try:
-                    is_text = is_text_page(pdf_path, page_no)
-                    page_type = "text" if is_text else "scanned"
-                    logger.info(f"Page {page_no} detected as: {page_type}")
-                except Exception as e:
-                    logger.warning(f"Failed to detect page type for page {page_no}: {e}")
-                    is_text = False  # Default to scanned if detection fails
-                    page_type = "scanned (fallback)"
+                page_result = None
+                retry_count = 0
+                max_retries = 2 if retry_on_failure else 0
                 
-                tables = []
-                extraction_method = ""
-                
-                if is_text:
-                    # Use Camelot for vector-based PDFs
+                while page_result is None and retry_count <= max_retries:
                     try:
-                        logger.info(f"Using Camelot extraction for page {page_no}")
-                        camelot_tables = extract_tables_with_camelot(pdf_path, pages=str(page_no))
+                        # Determine if this is a text page or scanned page
+                        is_text = is_text_page(pdf_path, page_no)
+                        page_type = "text" if is_text else "scanned"
+                        logger.info(f"Page {page_no} detected as: {page_type}")
                         
-                        # Convert DataFrames to list of lists
-                        for df in camelot_tables:
-                            if not df.empty:
-                                table_as_lists = df.values.tolist()
-                                tables.append(table_as_lists)
+                        tables = []
+                        extraction_method = ""
                         
-                        extraction_method = "camelot"
-                        logger.info(f"Camelot extracted {len(tables)} tables from page {page_no}")
+                        if is_text and retry_count == 0:
+                            # Primary: Use Camelot for vector-based PDFs
+                            try:
+                                logger.info(f"Using Camelot extraction for page {page_no}")
+                                camelot_tables = extract_tables_with_camelot(pdf_path, pages=str(page_no))
+                                
+                                # Convert DataFrames to list of lists
+                                for df in camelot_tables:
+                                    if not df.empty:
+                                        table_as_lists = df.values.tolist()
+                                        tables.append(table_as_lists)
+                                
+                                extraction_method = "camelot"
+                                extraction_stats['camelot_pages'] += 1
+                                logger.info(f"Camelot extracted {len(tables)} tables from page {page_no}")
+                                
+                                # Validate extraction quality
+                                if not tables and retry_on_failure:
+                                    raise Exception("Camelot found no tables, will retry with Tesseract")
+                                
+                            except Exception as e:
+                                logger.warning(f"Camelot extraction failed for page {page_no}: {e}")
+                                if retry_on_failure:
+                                    logger.info(f"Will retry page {page_no} with Tesseract")
+                                    is_text = False  # Force Tesseract on retry
+                                    retry_count += 1
+                                    extraction_stats['retry_attempts'] += 1
+                                    continue
+                                else:
+                                    raise e
+                        
+                        if not is_text or retry_count > 0:
+                            # Use Tesseract for scanned PDFs or as fallback
+                            try:
+                                logger.info(f"Using Tesseract extraction for page {page_no}")
+                                tesseract_tables = extract_tables_with_tesseract_pipeline(pdf_path, pages=str(page_no))
+                                
+                                # Convert DataFrames to list of lists
+                                for df in tesseract_tables:
+                                    if not df.empty:
+                                        table_as_lists = df.values.tolist()
+                                        tables.append(table_as_lists)
+                                
+                                extraction_method = "tesseract" if retry_count == 0 else "tesseract_fallback"
+                                extraction_stats['tesseract_pages'] += 1
+                                logger.info(f"Tesseract extracted {len(tables)} tables from page {page_no}")
+                                
+                            except Exception as e:
+                                logger.error(f"Tesseract extraction failed for page {page_no}: {e}")
+                                if retry_count < max_retries:
+                                    retry_count += 1
+                                    extraction_stats['retry_attempts'] += 1
+                                    continue
+                                else:
+                                    extraction_method = "failed"
+                                    extraction_stats['failed_pages'] += 1
+                        
+                        # Extract full text from the page
+                        full_text = ""
+                        try:
+                            if is_text:
+                                # For text pages, use pdfplumber
+                                page = pdf.pages[page_no - 1]
+                                full_text = page.extract_text() or ""
+                                logger.debug(f"Extracted {len(full_text)} characters using pdfplumber")
+                            else:
+                                # For scanned pages, use Tesseract OCR
+                                page = pdf.pages[page_no - 1]
+                                page_image = page.to_image(resolution=300)
+                                full_text = pytesseract.image_to_string(page_image.original, lang="eng")
+                                logger.debug(f"Extracted {len(full_text)} characters using Tesseract")
+                                
+                        except Exception as e:
+                            logger.error(f"Full text extraction failed for page {page_no}: {e}")
+                            full_text = ""
+                        
+                        # Calculate confidence metrics
+                        from .pdf_utils import enhance_ocr_confidence
+                        confidence = enhance_ocr_confidence(pdf_path, page_no)
+                        
+                        # Add page results
+                        page_result = {
+                            "page": page_no,
+                            "tables": tables,
+                            "full_text": full_text.strip(),
+                            "page_type": page_type,
+                            "extraction_method": extraction_method,
+                            "confidence": confidence,
+                            "retry_count": retry_count
+                        }
+                        
+                        logger.info(f"Page {page_no} completed: {len(tables)} tables, {len(full_text)} characters, confidence: {confidence.get('overall_confidence', 0):.2f}")
                         
                     except Exception as e:
-                        logger.warning(f"Camelot extraction failed for page {page_no}: {e}")
-                        logger.info(f"Falling back to Tesseract for page {page_no}")
-                        # Fallback to Tesseract
-                        is_text = False
-                
-                if not is_text:
-                    # Use Tesseract for scanned PDFs
-                    try:
-                        logger.info(f"Using Tesseract extraction for page {page_no}")
-                        tesseract_tables = extract_tables_with_tesseract_pipeline(pdf_path, pages=str(page_no))
+                        logger.error(f"Page {page_no} attempt {retry_count + 1} failed: {e}")
+                        retry_count += 1
+                        extraction_stats['retry_attempts'] += 1
                         
-                        # Convert DataFrames to list of lists
-                        for df in tesseract_tables:
-                            if not df.empty:
-                                table_as_lists = df.values.tolist()
-                                tables.append(table_as_lists)
-                        
-                        extraction_method = "tesseract"
-                        logger.info(f"Tesseract extracted {len(tables)} tables from page {page_no}")
-                        
-                    except Exception as e:
-                        logger.error(f"Tesseract extraction failed for page {page_no}: {e}")
-                        # Continue with empty tables
-                        extraction_method = "failed"
+                        if retry_count > max_retries:
+                            # Final fallback: create empty result
+                            page_result = {
+                                "page": page_no,
+                                "tables": [],
+                                "full_text": "",
+                                "page_type": "failed",
+                                "extraction_method": "failed",
+                                "confidence": {"overall_confidence": 0.0},
+                                "retry_count": retry_count - 1
+                            }
+                            extraction_stats['failed_pages'] += 1
+                            logger.error(f"Page {page_no} failed after all retry attempts")
                 
-                # Extract full text from the page
-                full_text = ""
-                try:
-                    if is_text:
-                        # For text pages, use pdfplumber
-                        page = pdf.pages[page_no - 1]
-                        full_text = page.extract_text() or ""
-                        logger.debug(f"Extracted {len(full_text)} characters using pdfplumber")
-                    else:
-                        # For scanned pages, use Tesseract OCR
-                        page = pdf.pages[page_no - 1]
-                        page_image = page.to_image(resolution=300)
-                        full_text = pytesseract.image_to_string(page_image.original, lang="eng")
-                        logger.debug(f"Extracted {len(full_text)} characters using Tesseract")
-                        
-                except Exception as e:
-                    logger.error(f"Full text extraction failed for page {page_no}: {e}")
-                    full_text = ""
-                
-                # Add page results
-                page_result = {
-                    "page": page_no,
-                    "tables": tables,
-                    "full_text": full_text.strip(),
-                    "page_type": page_type,
-                    "extraction_method": extraction_method
-                }
-                
-                results.append(page_result)
-                logger.info(f"Page {page_no} completed: {len(tables)} tables, {len(full_text)} characters")
+                if page_result:
+                    results.append(page_result)
         
-        logger.info(f"Unified OCR pipeline completed. Processed {len(results)} pages")
+        # Log extraction statistics
+        logger.info(f"Unified OCR pipeline completed. Stats: {extraction_stats}")
+        
+        # Validate overall extraction quality
+        from .pdf_utils import validate_extraction_quality
+        all_transactions = []
+        for page_result in results:
+            all_transactions.extend(page_result.get('tables', []))
+        
+        validation = validate_extraction_quality(all_transactions)
+        logger.info(f"Extraction quality: {validation}")
+        
         return results
         
     except Exception as e:

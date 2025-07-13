@@ -174,8 +174,8 @@ class TestOCRIntegration:
         assert len(results) > 0
         
         page_result = results[0]
-        # Should fall back to tesseract
-        assert page_result['extraction_method'] == 'tesseract'
+        # Should fall back to tesseract_fallback
+        assert page_result['extraction_method'] == 'tesseract_fallback'
     
     @pytest.mark.asyncio
     async def test_run_ocr_preserves_api(self, sample_pdf_path, mock_text_page, 
