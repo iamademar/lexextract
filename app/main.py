@@ -9,8 +9,9 @@ from datetime import datetime
 import shutil
 
 from .db import get_db
-from .models import Statement, Client
+from .models import Statement, Client, Transaction
 from .services.ocr import run_ocr
+from .services.parser import parse_transactions, run_extraction, run_structure_extraction
 
 # Load environment variables
 load_dotenv()
@@ -90,33 +91,108 @@ async def upload_statement(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    # Process PDF with OCR
+    # Process PDF with unified OCR pipeline and enhanced transaction parsing
     try:
-        logger.info(f"Starting OCR processing for file: {file_path}")
-        ocr_results = await run_ocr(file_path)
-        logger.info(f"OCR processing completed. Extracted {len(ocr_results)} pages")
+        logger.info(f"Starting unified OCR processing for file: {file_path}")
+        
+        # Use the unified OCR pipeline that combines Camelot + Tesseract intelligently
+        from .services.ocr import run_unified_ocr_pipeline
+        ocr_results = run_unified_ocr_pipeline(file_path)
+        logger.info(f"Unified OCR completed. Processed {len(ocr_results)} pages")
+        
+        # Use the enhanced parser that handles multiple formats
+        transactions_data = parse_transactions(ocr_results)
+        logger.info(f"Enhanced parsing completed. Found {len(transactions_data)} transactions")
+        
+        # Convert TransactionData objects to dictionaries for database storage
+        transactions_dicts = []
+        for trans in transactions_data:
+            transaction_dict = {
+                'date': trans.date,
+                'description': trans.payee,
+                'amount': trans.amount,
+                'balance': trans.balance,
+                'type': trans.type,
+                'currency': trans.currency
+            }
+            transactions_dicts.append(transaction_dict)
+        
+        # Get OCR text for backup/reference
+        ocr_text_pages = [page_result.get('full_text', '') for page_result in ocr_results]
+        
     except Exception as e:
-        logger.error(f"OCR processing failed: {e}")
-        # Remove the uploaded file if OCR fails
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
+        logger.error(f"Unified OCR processing failed: {e}")
+        logger.info("Falling back to legacy extraction methods")
+        
+        try:
+            # Fallback to structure analysis first
+            transactions_dicts = await run_structure_extraction(file_path)
+            logger.info(f"Structure analysis fallback completed. Found {len(transactions_dicts)} transactions")
+            
+            # If structure analysis found no transactions, fall back to regex-based parsing
+            if not transactions_dicts:
+                logger.info("No transactions found in structure analysis, falling back to regex-based extraction")
+                transactions_dicts = await run_extraction(file_path)
+                logger.info(f"Regex-based extraction completed. Found {len(transactions_dicts)} transactions")
+            
+            # Get OCR text for backup
+            ocr_text_pages = await run_ocr(file_path)
+            logger.info(f"OCR backup completed. Extracted {len(ocr_text_pages)} pages")
+        except Exception as fallback_error:
+            logger.error(f"All extraction methods failed: {fallback_error}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise HTTPException(status_code=500, detail=f"All extraction methods failed: {str(fallback_error)}")
     
-    # Create Statement record in database
+    # Create Statement and Transaction records in database
     statement = Statement(
-        client_id=client_id,  # Use the provided client_id parameter
+        client_id=client_id,
         file_path=file_path,
-        ocr_text="\n".join(ocr_results)  # Store all pages as joined text
+        ocr_text="\n".join(ocr_text_pages) if ocr_text_pages else ""
     )
     
     db.add(statement)
-    await db.commit()
+    await db.flush()  # Flush to get the statement ID without committing
+    
+    # Create Transaction records in the same transaction
+    created_transactions = []
+    if transactions_dicts:
+        try:
+            for trans_data in transactions_dicts:
+                transaction = Transaction(
+                    statement_id=statement.id,
+                    date=trans_data['date'].date() if hasattr(trans_data['date'], 'date') else trans_data['date'],
+                    payee=trans_data['description'],
+                    amount=trans_data['amount'],
+                    type=trans_data['type'],
+                    balance=trans_data.get('balance'),
+                    currency=trans_data.get('currency', 'USD')
+                )
+                db.add(transaction)
+                created_transactions.append(transaction)
+            
+            logger.info(f"Created {len(created_transactions)} transaction objects, committing to database...")
+        except Exception as e:
+            logger.error(f"Failed to create transaction objects: {e}")
+            # Continue without transactions
+    
+    # Commit everything together (Statement + Transactions)
+    try:
+        await db.commit()
+        logger.info(f"Successfully saved Statement {statement.id} with {len(created_transactions)} transactions")
+    except Exception as e:
+        logger.error(f"Failed to save to database: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database save failed: {str(e)}")
+    
     await db.refresh(statement)
     
     return {
         "statement_id": statement.id,
-        "pages_processed": len(ocr_results),
-        "ocr_preview": ocr_results[0][:200] + "..." if ocr_results and len(ocr_results[0]) > 200 else ocr_results[0] if ocr_results else ""
+        "pages_processed": len(ocr_text_pages) if ocr_text_pages else 0,
+        "transactions_found": len(transactions_dicts),
+        "transactions_saved": len(created_transactions),
+        "ocr_preview": ocr_text_pages[0][:200] + "..." if ocr_text_pages and len(ocr_text_pages[0]) > 200 else ocr_text_pages[0] if ocr_text_pages else ""
     }
 
 # Add your API routes here as you develop them

@@ -31,6 +31,19 @@ services:
       timeout: 5s
       retries: 5
 
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
   fastapi:
     build: .
     ports:
@@ -53,4 +66,5 @@ services:
 
 volumes:
   postgres_data:
-  postgres_test_data: 
+  postgres_test_data:
+  pgadmin_data: 
