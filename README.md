@@ -310,13 +310,13 @@ Tests include memory-efficient processing of different PDF formats:
 | GET | `/` | Root endpoint | ✅ Working |
 | GET | `/health` | Health check | ✅ Working |
 | POST | `/upload/statement?client_id={id}` | Upload PDF statement with OCR processing | ✅ Working |
+| POST | `/chat` | Chat interface for querying statements with NL-to-SQL | ✅ Working |
 
 ### Planned
 | Method | Endpoint | Description | Status |
 |--------|----------|-------------|---------|
 | POST | `/auth/login` | User authentication | ⏳ Planned |
 | GET | `/download/csv/{id}` | Download CSV export | ⏳ Planned |
-| POST | `/chat/message` | Chat with AI about statements | ⏳ Planned |
 | GET | `/history/sessions` | List chat sessions | ⏳ Planned |
 
 ## 🔒 Security Features
