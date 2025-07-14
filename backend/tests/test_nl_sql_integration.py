@@ -159,7 +159,6 @@ class TestNLSQLIntegration:
         
         assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
-        assert response_data["client_id"] is None
         
         # Verify the prompt was sent to Mistral
         mock_requests_post.assert_called_once()
@@ -295,10 +294,9 @@ class TestNLSQLIntegration:
                 response_data = response.json()
                 
                 # All responses should have the same schema
-                assert "client_id" in response_data
                 assert "response" in response_data
                 assert "sql" in response_data
-                assert isinstance(response_data["client_id"], int)
+                # client_id is no longer in the response
                 assert isinstance(response_data["response"], str)
                 # sql field can be string or null
                 assert response_data["sql"] is None or isinstance(response_data["sql"], str)

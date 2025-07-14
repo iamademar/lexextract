@@ -38,7 +38,6 @@ class TestChatNLToSQL:
         
         assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
-        assert response_data["client_id"] is None
         assert "Alice, Bob, Charlie" in response_data["response"]
         assert response_data["sql"] == "Database query executed successfully"
         
@@ -87,7 +86,6 @@ class TestChatNLToSQL:
         
         assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
-        assert response_data["client_id"] is None
         assert response_data["response"] == "Hello! How can I help you today?"
         assert response_data["sql"] is None
         
@@ -110,7 +108,6 @@ class TestChatNLToSQL:
         
         assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
-        assert response_data["client_id"] is None
         assert response_data["response"] == "I'm sorry, I had trouble with that query."
         assert response_data["sql"] is None
         
@@ -133,12 +130,10 @@ class TestChatNLToSQL:
         response_data = response.json()
         
         # Check response structure
-        assert "client_id" in response_data
         assert "response" in response_data
         assert "sql" in response_data
         
         # Check values
-        assert response_data["client_id"] is None
         assert response_data["response"] == "Client data: John Doe, jane@example.com"
         assert response_data["sql"] == "Database query executed successfully"
 
@@ -156,12 +151,10 @@ class TestChatNLToSQL:
         response_data = response.json()
         
         # Check response structure
-        assert "client_id" in response_data
         assert "response" in response_data
         assert "sql" in response_data
         
         # Check values
-        assert response_data["client_id"] is None
         assert response_data["response"] == "This is a general AI response"
         assert response_data["sql"] is None
 

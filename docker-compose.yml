@@ -45,7 +45,7 @@ services:
       - pgadmin_data:/var/lib/pgadmin
 
   fastapi:
-    build: .
+    build: ./backend
     ports:
       - "8000:8000"
     environment:
@@ -53,12 +53,12 @@ services:
       - DEBUG=True
       - ENVIRONMENT=development
     volumes:
-      - ./uploads:/var/app/data/uploads
-      - ./exports:/var/app/data/exports
-      - ./alembic:/app/alembic
-      - ./alembic.ini:/app/alembic.ini
-      - ./tests:/app/tests
-      - ./app:/app/app
+      - ./backend/uploads:/var/app/data/uploads
+      - ./backend/exports:/var/app/data/exports
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+      - ./backend/tests:/app/tests
+      - ./backend/app:/app/app
     depends_on:
       postgres:
         condition: service_healthy

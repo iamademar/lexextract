@@ -23,7 +23,6 @@ class ChatRequest(BaseModel):
     message: str
 
 class ChatResponse(BaseModel):
-    client_id: Optional[int] = None
     response: str
     sql: Optional[str] = None
 
@@ -79,7 +78,6 @@ async def chat(request: ChatRequest):
         logger.info(f"Successfully processed chat request for client {request.client_id}")
 
         return ChatResponse(
-            client_id=request.client_id,
             response=response,
             sql=sql
         )
