@@ -24,8 +24,8 @@ class TestNLSQLIntegration:
         self.client = TestClient(app)
 
     @patch('app.llms.mistral_llm.requests.post')
-    @patch('app.routers.chat.create_engine')
-    def test_full_mistral_llm_integration(self, mock_create_engine, mock_requests_post):
+    @patch('app.routers.chat.run_in_threadpool')
+    def test_full_mistral_llm_integration(self, mock_run_in_threadpool, mock_requests_post):
         """Test MistralLLM integration with the chat system"""
         # Mock Ollama API response
         mock_response = Mock()
@@ -38,7 +38,7 @@ class TestNLSQLIntegration:
         
         # Mock database engine to prevent actual DB connection during test
         mock_engine = Mock()
-        mock_create_engine.return_value = mock_engine
+        mock_run_in_threadpool.return_value = mock_engine # Changed from mock_create_engine to mock_run_in_threadpool
         
         # Test general chat (should use MistralLLM via fallback)
         response = self.client.post(
@@ -165,17 +165,12 @@ class TestNLSQLIntegration:
         call_args = mock_requests_post.call_args
         assert "Hello there" in call_args[1]["json"]["prompt"]
 
+    @patch('app.routers.chat.query_mistral')
     @patch('app.routers.chat.run_in_threadpool')
-    @patch('app.llms.mistral_llm.requests.post')
-    def test_different_query_types_routing(self, mock_requests_post, mock_run_in_threadpool):
+    def test_different_query_types_routing(self, mock_run_in_threadpool, mock_query_mistral):
         """Test that different query types are routed correctly"""
         # Setup mocks
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"response": "Mistral response"}
-        mock_response.raise_for_status.return_value = None
-        mock_requests_post.return_value = mock_response
-        
+        mock_query_mistral.return_value = "Mistral response"
         mock_run_in_threadpool.return_value = "Database response"
         
         test_cases = [
@@ -190,12 +185,12 @@ class TestNLSQLIntegration:
         
         for message, should_use_sql, expected_sql in test_cases:
             # Reset mocks
-            mock_requests_post.reset_mock()
+            mock_query_mistral.reset_mock()
             mock_run_in_threadpool.reset_mock()
             
             response = self.client.post(
                 "/chat",
-                json={"client_id": 123, "message": message}
+                json={"message": message}
             )
             
             assert response.status_code == status.HTTP_200_OK
@@ -207,7 +202,7 @@ class TestNLSQLIntegration:
                 mock_run_in_threadpool.assert_called_once()
             else:
                 # Should call Mistral fallback
-                mock_requests_post.assert_called_once()
+                mock_query_mistral.assert_called_once()
 
     @patch('app.llms.mistral_llm.requests.post')
     def test_async_handling_in_chat_endpoint(self, mock_requests_post):
@@ -225,26 +220,44 @@ class TestNLSQLIntegration:
         
         results = []
         
-        def make_request(client_id):
+        def make_request():
             response = self.client.post(
                 "/chat",
-                json={"client_id": client_id, "message": "Hello"}
+                json={"message": "Hello"}
             )
-            results.append((client_id, response.status_code))
+            results.append(response.status_code)
         
+        # Start multiple threads
         threads = []
-        for i in range(3):
-            thread = threading.Thread(target=make_request, args=(i,))
+        for _ in range(5):
+            thread = threading.Thread(target=make_request)
             threads.append(thread)
             thread.start()
         
+        # Wait for all threads to complete
         for thread in threads:
             thread.join()
         
-        # All requests should succeed
-        assert len(results) == 3
-        for client_id, status_code in results:
-            assert status_code == status.HTTP_200_OK
+        # Check that all requests were successful
+        assert all(status == 200 for status in results)
+        assert len(results) == 5
+
+    @patch('app.llms.mistral_llm.requests.post')
+    def test_performance_with_multiple_requests(self, mock_requests_post):
+        """Test performance with multiple consecutive requests"""
+        # Mock response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"response": "Performance test response"}
+        mock_response.raise_for_status.return_value = None
+        mock_requests_post.return_value = mock_response
+        
+        # Test multiple consecutive requests
+        for i in range(10):
+            response = self.client.post(
+                "/chat",
+                json={"message": f"Test message {i}"}
+            )
 
     @patch('app.routers.chat.run_in_threadpool')
     def test_run_in_threadpool_usage(self, mock_run_in_threadpool):
@@ -287,7 +300,7 @@ class TestNLSQLIntegration:
             for message in test_messages:
                 response = self.client.post(
                     "/chat",
-                    json={"client_id": 123, "message": message}
+                    json={"message": message}
                 )
                 
                 assert response.status_code == status.HTTP_200_OK

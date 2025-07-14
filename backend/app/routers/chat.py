@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 class ChatRequest(BaseModel):
-    client_id: Optional[int] = None
     message: str
 
 class ChatResponse(BaseModel):
@@ -44,13 +43,13 @@ async def chat(request: ChatRequest):
     Chat endpoint that processes messages using NL-to-SQL or Mistral fallback
     
     Args:
-        request: ChatRequest containing client_id and message
+        request: ChatRequest containing message
     
     Returns:
         ChatResponse with the AI-generated response and optional SQL
     """
     try:
-        logger.info(f"Processing chat request for client {request.client_id}")
+        logger.info("Processing chat request")
         
         text = request.message.strip()
         sql: Optional[str] = None
@@ -75,7 +74,7 @@ async def chat(request: ChatRequest):
             logger.info("Processing as general chat query")
             response = query_mistral(text)
 
-        logger.info(f"Successfully processed chat request for client {request.client_id}")
+        logger.info("Successfully processed chat request")
 
         return ChatResponse(
             response=response,
