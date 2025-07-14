@@ -29,7 +29,7 @@ class TestMistralChat:
         mock_post.return_value = mock_response
         
         # Test the function
-        result = query_mistral("Hello", 123)
+        result = query_mistral("Hello")
         
         # Assertions
         assert result == "Hello! How can I help you today?"
@@ -37,7 +37,7 @@ class TestMistralChat:
             "http://host.docker.internal:11434/api/generate",
             json={
                 "model": "mistral",
-                "prompt": "[Client ID: 123]\nHello",
+                "prompt": "Hello",
                 "stream": False
             },
             timeout=30
@@ -54,7 +54,7 @@ class TestMistralChat:
         }
         mock_post.return_value = mock_response
         
-        result = query_mistral("Hello", 456)
+        result = query_mistral("Hello")
         
         assert result == "Hello! How can I help you today?"
 
@@ -69,7 +69,7 @@ class TestMistralChat:
         }
         mock_post.return_value = mock_response
         
-        result = query_mistral("Hello", 789)
+        result = query_mistral("Hello")
         
         assert result == ""
 
@@ -84,7 +84,7 @@ class TestMistralChat:
         }
         mock_post.return_value = mock_response
         
-        result = query_mistral("Hello", 101)
+        result = query_mistral("Hello")
         
         assert result == ""
 
@@ -94,7 +94,7 @@ class TestMistralChat:
         # Mock connection error
         mock_post.side_effect = requests.exceptions.ConnectionError("Connection failed")
         
-        result = query_mistral("Hello", 202)
+        result = query_mistral("Hello")
         
         assert result == "Error: Unable to connect to AI service. Please try again later."
 
@@ -104,7 +104,7 @@ class TestMistralChat:
         # Mock timeout error
         mock_post.side_effect = requests.exceptions.Timeout("Request timed out")
         
-        result = query_mistral("Hello", 303)
+        result = query_mistral("Hello")
         
         assert result == "Error: Request timed out. Please try again."
 
@@ -117,7 +117,7 @@ class TestMistralChat:
         mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("500 Server Error")
         mock_post.return_value = mock_response
         
-        result = query_mistral("Hello", 404)
+        result = query_mistral("Hello")
         
         assert result == "Error: Failed to process your request. Please try again."
 
@@ -130,7 +130,7 @@ class TestMistralChat:
         mock_response.json.side_effect = json.JSONDecodeError("Invalid JSON", "doc", 0)
         mock_post.return_value = mock_response
         
-        result = query_mistral("Hello", 505)
+        result = query_mistral("Hello")
         
         assert result == "Error: An unexpected error occurred. Please try again."
 
@@ -140,47 +140,27 @@ class TestMistralChat:
         # Mock unexpected error
         mock_post.side_effect = Exception("Unexpected error occurred")
         
-        result = query_mistral("Hello", 606)
+        result = query_mistral("Hello")
         
         assert result == "Error: An unexpected error occurred. Please try again."
 
     @patch('app.services.mistral_chat.requests.post')
-    def test_query_mistral_client_id_enrichment(self, mock_post):
-        """Test that client ID is properly added to the prompt"""
+    def test_query_mistral_prompt_handling(self, mock_post):
+        """Test that prompts are passed through correctly"""
         # Mock successful response
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "response": "Response for client 999"
+            "response": "Response for query"
         }
         mock_post.return_value = mock_response
         
-        query_mistral("Show me my transactions", 999)
+        query_mistral("Show me my transactions")
         
-        # Check that the prompt was enriched with client ID
+        # Check that the prompt was passed through correctly
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert call_args[1]['json']['prompt'] == "[Client ID: 999]\nShow me my transactions"
-
-    @patch('app.services.mistral_chat.requests.post')
-    def test_query_mistral_different_client_ids(self, mock_post):
-        """Test that different client IDs are handled correctly"""
-        # Mock successful response
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "response": "Response"
-        }
-        mock_post.return_value = mock_response
-        
-        # Test with different client IDs
-        for client_id in [1, 42, 999, 12345]:
-            query_mistral("Test message", client_id)
-            
-            # Check that the correct client ID was used
-            call_args = mock_post.call_args
-            expected_prompt = f"[Client ID: {client_id}]\nTest message"
-            assert call_args[1]['json']['prompt'] == expected_prompt
+        assert call_args[1]['json']['prompt'] == "Show me my transactions"
 
     @patch('app.services.mistral_chat.requests.post')
     def test_query_mistral_request_parameters(self, mock_post):
@@ -193,14 +173,14 @@ class TestMistralChat:
         }
         mock_post.return_value = mock_response
         
-        query_mistral("Test message", 123)
+        query_mistral("Hello")
         
         # Check all request parameters
         mock_post.assert_called_once_with(
             "http://host.docker.internal:11434/api/generate",
             json={
                 "model": "mistral",
-                "prompt": "[Client ID: 123]\nTest message",
+                "prompt": "Hello",
                 "stream": False
             },
             timeout=30
@@ -220,14 +200,13 @@ class TestMistralChat:
         # Create a long message
         long_message = "This is a very long message. " * 100
         
-        result = query_mistral(long_message, 777)
+        result = query_mistral(long_message)
         
         assert result == "I understand your long message"
         
         # Check that the long message was included in the prompt
         call_args = mock_post.call_args
-        expected_prompt = f"[Client ID: 777]\n{long_message}"
-        assert call_args[1]['json']['prompt'] == expected_prompt
+        assert call_args[1]['json']['prompt'] == long_message
 
     @patch('app.services.mistral_chat.requests.post')
     def test_query_mistral_special_characters(self, mock_post):
@@ -243,11 +222,10 @@ class TestMistralChat:
         # Test with special characters
         special_message = "Hello! @#$%^&*()_+-=[]{}|;':\",./<>?"
         
-        result = query_mistral(special_message, 888)
+        result = query_mistral(special_message)
         
         assert result == "Handled special characters"
         
         # Check that special characters were preserved
         call_args = mock_post.call_args
-        expected_prompt = f"[Client ID: 888]\n{special_message}"
-        assert call_args[1]['json']['prompt'] == expected_prompt 
+        assert call_args[1]['json']['prompt'] == special_message 

@@ -42,11 +42,11 @@ class TestChatEndpoint:
         assert response.status_code == status.HTTP_200_OK
         
         response_data = response.json()
-        assert response_data["client_id"] == 123
+        assert response_data["client_id"] is None
         assert response_data["response"] == "Hello! How can I help you today?"
         
         # Check that the service was called with correct parameters
-        mock_query_mistral.assert_called_once_with("Hello", 123)
+        mock_query_mistral.assert_called_once_with("Hello")
 
     @patch('app.routers.chat.query_mistral')
     def test_chat_endpoint_different_client_ids(self, mock_query_mistral):
@@ -90,7 +90,7 @@ class TestChatEndpoint:
         assert response.status_code == status.HTTP_200_OK
         
         response_data = response.json()
-        assert response_data["client_id"] == 456
+        assert response_data["client_id"] is None
         assert response_data["response"] == "I understand your long message"
         
         # Check that the long message was passed to the service
@@ -115,7 +115,7 @@ class TestChatEndpoint:
         assert response.status_code == status.HTTP_200_OK
         
         response_data = response.json()
-        assert response_data["client_id"] == 789
+        assert response_data["client_id"] is None
         assert response_data["response"] == "Handled special characters"
         
         # Check that special characters were preserved
@@ -137,7 +137,7 @@ class TestChatEndpoint:
         assert response.status_code == status.HTTP_200_OK
         
         response_data = response.json()
-        assert response_data["client_id"] == 101
+        assert response_data["client_id"] is None
         assert response_data["response"] == "Please provide a message"
         
         # Check that empty message was passed to the service
@@ -159,7 +159,7 @@ class TestChatEndpoint:
         assert response.status_code == status.HTTP_200_OK
         
         response_data = response.json()
-        assert response_data["client_id"] == 202
+        assert response_data["client_id"] is None
         assert response_data["response"] == "Error: Unable to connect to AI service. Please try again later."
 
     @patch('app.routers.chat.query_mistral')
@@ -325,7 +325,7 @@ class TestChatEndpoint:
         assert response.status_code == status.HTTP_200_OK
         
         response_data = response.json()
-        assert response_data["client_id"] == 0
+        assert response_data["client_id"] is None
         assert response_data["response"] == "Response for zero client ID"
 
     @patch('app.routers.chat.query_mistral')
@@ -367,7 +367,7 @@ class TestChatEndpoint:
         assert response.status_code == status.HTTP_200_OK
         
         response_data = response.json()
-        assert response_data["client_id"] == 555
+        assert response_data["client_id"] is None
         assert response_data["response"] == "Handled unicode message"
         
         # Check that unicode message was passed to the service
@@ -398,5 +398,5 @@ class TestChatEndpoint:
         assert isinstance(response_data["response"], str)
         
         # Check that values are correct
-        assert response_data["client_id"] == 999
+        assert response_data["client_id"] is None
         assert response_data["response"] == "Test response" 

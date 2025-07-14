@@ -3,20 +3,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def query_mistral(prompt: str, client_id: int) -> str:
+def query_mistral(prompt: str) -> str:
     """
     Query the Mistral model via Ollama API
     
     Args:
         prompt: The user's message/query
-        client_id: The client ID for context
     
     Returns:
         The response from the Mistral model
     """
     try:
-        # Enrich the prompt with client context
-        enriched_prompt = f"[Client ID: {client_id}]\n{prompt}"
+        # Use the prompt directly
+        enriched_prompt = prompt
         
         # Use local Ollama instance on macOS from within Docker container
         ollama_url = "http://host.docker.internal:11434/api/generate"
