@@ -72,6 +72,111 @@ Generate only the SQL query, no explanations."""
 
     return base_context
 
+def format_database_results(raw_result: str, original_query: str, sql_query: str) -> str:
+    """
+    Format raw database results into natural language using MistralLLM
+    
+    Args:
+        raw_result: Raw database result string
+        original_query: Original user query
+        sql_query: SQL query that was executed
+        
+    Returns:
+        Natural language formatted response
+    """
+    logger.info(f"Formatting database results for query: {original_query}")
+    logger.info(f"Raw result preview: {raw_result[:200]}...")
+    
+    try:
+        # Create a prompt for formatting the results
+        format_prompt = f"""You are an assistant helping to format database query results into natural language.
+
+Original user question: "{original_query}"
+SQL query executed: {sql_query}
+Raw database results: {raw_result[:1000]}
+
+Please format these database results into a clear, natural language response that directly answers the user's question. 
+
+Guidelines:
+- If showing statements/files, mention how many were found and show key details like filenames and dates
+- If showing clients, list them clearly  
+- If showing transactions, summarize key information
+- Use bullet points or numbered lists for multiple items
+- Make it conversational and helpful
+- Don't include the raw SQL unless specifically relevant
+
+Provide a clear, helpful response:"""
+
+        logger.info("Calling MistralLLM to format results...")
+        # Use MistralLLM to format the response
+        formatted_response = llm._call(format_prompt)
+        logger.info(f"MistralLLM formatted response: {formatted_response[:200]}...")
+        return formatted_response
+        
+    except Exception as e:
+        logger.warning(f"Failed to format results with LLM: {e}")
+        logger.info("Falling back to simple formatting")
+        # Fallback to simple formatting
+        return format_results_simple(raw_result, original_query)
+
+def format_results_simple(raw_result: str, original_query: str) -> str:
+    """
+    Simple fallback formatting when LLM is unavailable
+    """
+    logger.info("Using simple formatting for results")
+    try:
+        # Try to parse as list of tuples (common database result format)
+        if raw_result.startswith('[') and ('Test Client' in raw_result or 'datetime' in raw_result):
+            logger.info("Parsing results as list of tuples")
+            import ast
+            import re
+            
+            # Clean up datetime objects in the string for parsing
+            cleaned_result = re.sub(r'datetime\.datetime\([^)]+\)', "'DATETIME'", raw_result)
+            results = ast.literal_eval(cleaned_result)
+            
+            if "statement" in original_query.lower():
+                count = len(results)
+                if count == 0:
+                    return "No statements found for Test Client."
+                elif count == 1:
+                    filename = results[0][1].split('/')[-1] if '/' in str(results[0][1]) else str(results[0][1])
+                    return f"Found 1 statement for Test Client:\n• {filename}"
+                else:
+                    response = f"Found {count} statements for Test Client:\n"
+                    for i, result in enumerate(results[:5], 1):  # Show first 5
+                        filename = str(result[1]).split('/')[-1] if '/' in str(result[1]) else str(result[1])
+                        response += f"{i}. {filename}\n"
+                    if count > 5:
+                        response += f"... and {count - 5} more statements"
+                    return response
+            
+            elif "client" in original_query.lower():
+                # Handle client queries
+                clients = set()
+                for result in results:
+                    if len(result) > 3:
+                        clients.add(result[3])  # client name is typically in position 3
+                return f"Found {len(results)} records for clients: {', '.join(clients)}"
+        
+        # For table listing queries
+        if "table" in original_query.lower() and raw_result.startswith('['):
+            try:
+                tables = ast.literal_eval(raw_result)
+                if isinstance(tables, list) and len(tables) > 0:
+                    table_names = [table[0] if isinstance(table, tuple) else str(table) for table in tables]
+                    return f"Database contains {len(table_names)} tables:\n• " + "\n• ".join(table_names)
+            except:
+                pass
+        
+        # For other types of results, provide a generic formatted response
+        logger.info("Using generic formatting")
+        return f"Query completed successfully. Found {len(raw_result.split(',')) if ',' in raw_result else 1} result(s)."
+        
+    except Exception as e:
+        logger.warning(f"Simple formatting failed: {e}")
+        return f"Query executed successfully. Results: {raw_result[:200]}..."
+
 def handle_special_queries(text: str) -> Optional[str]:
     """
     Handle special query patterns that commonly fail
@@ -155,8 +260,10 @@ async def chat(request: ChatRequest):
                 if special_sql:
                     logger.info(f"Using special query handler: {special_sql}")
                     # Execute the special query directly using the database object
-                    result = database.run(special_sql)
-                    response = f"Query executed successfully. Results:\n{result}"
+                    raw_result = database.run(special_sql)
+                    
+                    # Format the results into natural language
+                    response = format_database_results(str(raw_result), text, special_sql)
                     sql = special_sql
                 else:
                     # Use enhanced prompt for better context
@@ -166,7 +273,14 @@ async def chat(request: ChatRequest):
                     sql_result = await run_in_threadpool(
                         lambda: db_chain.run(enhanced_prompt)
                     )
-                    response = str(sql_result)
+                    
+                    # For LangChain results, the formatting might already be applied by the chain
+                    # But we can still try to improve it if it looks like raw data
+                    if sql_result and (sql_result.startswith('[') or 'Query result:' in sql_result):
+                        response = format_database_results(str(sql_result), text, "Generated SQL query")
+                    else:
+                        response = str(sql_result)
+                    
                     sql = "Database query executed successfully"  # Simplified SQL tracking
                 
                 logger.info("Successfully processed database query")
