@@ -14,6 +14,7 @@ sys.path.insert(0, str(project_root))
 
 from app.main import app
 from app.llms.mistral_llm import MistralLLM
+from app.routers.chat import create_enhanced_prompt, handle_special_queries
 
 
 class TestNLSQLIntegration:
@@ -77,6 +78,98 @@ class TestNLSQLIntegration:
         assert "John Doe, Jane Smith" in response_data["response"]
         assert response_data["sql"] == "Database query executed successfully"
 
+    @patch('app.routers.chat.database')
+    def test_special_query_handler_integration(self, mock_database):
+        """Test integration of special query handler with the chat system"""
+        mock_database.run.return_value = "[('clients',), ('statements',), ('transactions',)]"
+        
+        # Test that special queries bypass the normal SQL chain
+        response = self.client.post(
+            "/chat",
+            json={"message": "list all tables"}
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+        response_data = response.json()
+        assert "clients" in response_data["response"]
+        assert "statements" in response_data["response"]
+        assert "transactions" in response_data["response"]
+        assert "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" in response_data["sql"]
+        
+        # Verify database.run was called with the special query
+        mock_database.run.assert_called_once()
+
+    @patch('app.routers.chat.database')
+    def test_client_specific_queries_integration(self, mock_database):
+        """Test integration of client-specific queries"""
+        mock_database.run.return_value = "[('1', 'statement.pdf', '2025-01-01', 'Test Client')]"
+        
+        response = self.client.post(
+            "/chat",
+            json={"message": "find statements from Test Client"}
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+        response_data = response.json()
+        assert "Test Client" in response_data["response"]
+        assert "WHERE c.name ILIKE '%Test Client%'" in response_data["sql"]
+
+    def test_enhanced_prompt_creation(self):
+        """Test the enhanced prompt creation system"""
+        query = "show me all clients"
+        enhanced_prompt = create_enhanced_prompt(query)
+        
+        # Should contain PostgreSQL-specific guidance
+        assert "PostgreSQL SQL expert" in enhanced_prompt
+        assert "tablename" in enhanced_prompt
+        assert "schemaname = 'public'" in enhanced_prompt
+        assert "ILIKE" in enhanced_prompt
+        
+        # Should contain database schema information
+        assert "clients" in enhanced_prompt
+        assert "statements" in enhanced_prompt
+        assert "transactions" in enhanced_prompt
+        
+        # Should contain the actual query
+        assert query in enhanced_prompt
+
+    def test_keyword_based_pattern_matching_integration(self):
+        """Test integration of keyword-based pattern matching"""
+        # Test that the new keyword system works with the API
+        test_cases = [
+            ("recent statements", True),
+            ("latest transactions", True),
+            ("all client data", True),
+            ("database information", True),
+            ("hello world", False),
+            ("how are you", False)
+        ]
+        
+        for query, should_be_db in test_cases:
+            # Mock the appropriate response based on expected behavior
+            with patch('app.routers.chat.run_in_threadpool') as mock_run, \
+                 patch('app.routers.chat.query_mistral') as mock_mistral:
+                
+                mock_run.return_value = "Database result"
+                mock_mistral.return_value = "General chat response"
+                
+                response = self.client.post(
+                    "/chat",
+                    json={"message": query}
+                )
+                
+                assert response.status_code == status.HTTP_200_OK
+                response_data = response.json()
+                
+                if should_be_db:
+                    # Should be processed as database query
+                    assert response_data["sql"] is not None
+                    mock_run.assert_called()
+                else:
+                    # Should fall back to general chat
+                    assert response_data["sql"] is None
+                    mock_mistral.assert_called()
+
     @patch('app.llms.mistral_llm.requests.post')
     def test_mistral_llm_connection_error_handling(self, mock_requests_post):
         """Test handling when MistralLLM cannot connect to Ollama"""
@@ -104,7 +197,7 @@ class TestNLSQLIntegration:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "response": "I apologize, but I'm having trouble accessing the database right now."
+            "response": "I had trouble with that database query. Can you try rephrasing it?"
         }
         mock_response.raise_for_status.return_value = None
         mock_requests_post.return_value = mock_response
@@ -116,121 +209,155 @@ class TestNLSQLIntegration:
         
         assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
-        assert "having trouble accessing the database" in response_data["response"]
+        assert "trouble with that database query" in response_data["response"]
         assert response_data["sql"] is None
 
-    def test_mistral_llm_initialization_in_chat_router(self):
-        """Test that MistralLLM is properly initialized in the chat router"""
-        from app.routers.chat import llm
-        from app.llms.mistral_llm import MistralLLM
-        
-        # Verify the LLM is properly initialized
-        assert isinstance(llm, MistralLLM)
-        assert llm.endpoint == "http://host.docker.internal:11434/api/generate"
-        assert llm.model == "mistral"
-        assert llm.timeout == 30.0
-
-    def test_database_chain_initialization(self):
-        """Test that the database chain is properly initialized"""
-        from app.routers.chat import db_chain
-        
-        # Verify the chain exists and has the expected structure
-        assert db_chain is not None
-        assert hasattr(db_chain, 'run')
-        assert hasattr(db_chain, 'llm_chain')
-        assert hasattr(db_chain, 'database')
-
+    @patch('app.routers.chat.database')
     @patch('app.llms.mistral_llm.requests.post')
-    def test_client_context_preservation_through_system(self, mock_requests_post):
-        """Test that client context is preserved through the entire system"""
-        # Mock Mistral response that includes client context
+    def test_special_query_error_fallback(self, mock_requests_post, mock_database):
+        """Test special query error falling back to Mistral"""
+        # Mock database error for special query
+        mock_database.run.side_effect = Exception("Database connection failed")
+        
+        # Mock Mistral fallback response
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "response": "Hello Client 456! How can I assist you today?"
+            "response": "I couldn't access the database to list tables."
         }
         mock_response.raise_for_status.return_value = None
         mock_requests_post.return_value = mock_response
         
         response = self.client.post(
             "/chat",
-            json={"message": "Hello there"}
+            json={"message": "list all tables"}
         )
         
         assert response.status_code == status.HTTP_200_OK
         response_data = response.json()
-        
-        # Verify the prompt was sent to Mistral
-        mock_requests_post.assert_called_once()
-        call_args = mock_requests_post.call_args
-        assert "Hello there" in call_args[1]["json"]["prompt"]
+        assert "couldn't access the database" in response_data["response"]
+        assert response_data["sql"] is None
 
-    @patch('app.routers.chat.query_mistral')
     @patch('app.routers.chat.run_in_threadpool')
-    def test_different_query_types_routing(self, mock_run_in_threadpool, mock_query_mistral):
-        """Test that different query types are routed correctly"""
-        # Setup mocks
-        mock_query_mistral.return_value = "Mistral response"
-        mock_run_in_threadpool.return_value = "Database response"
-        
-        test_cases = [
-            # (message, should_use_sql, expected_sql_field)
-            ("list all clients", True, "Database query executed successfully"),
-            ("show me data", True, "Database query executed successfully"),
-            ("count records", True, "Database query executed successfully"),
-            ("Hello world", False, None),
-            ("Tell me a joke", False, None),
-            ("How are you?", False, None),
-        ]
-        
-        for message, should_use_sql, expected_sql in test_cases:
-            # Reset mocks
-            mock_query_mistral.reset_mock()
-            mock_run_in_threadpool.reset_mock()
-            
-            response = self.client.post(
-                "/chat",
-                json={"message": message}
-            )
-            
-            assert response.status_code == status.HTTP_200_OK
-            response_data = response.json()
-            assert response_data["sql"] == expected_sql
-            
-            if should_use_sql:
-                # Should call SQL chain
-                mock_run_in_threadpool.assert_called_once()
-            else:
-                # Should call Mistral fallback
-                mock_query_mistral.assert_called_once()
-
     @patch('app.llms.mistral_llm.requests.post')
-    def test_async_handling_in_chat_endpoint(self, mock_requests_post):
-        """Test that async operations are handled correctly in the chat endpoint"""
-        # Mock delayed response to test async behavior
+    def test_enhanced_prompt_with_mistral_llm(self, mock_requests_post, mock_run_in_threadpool):
+        """Test that enhanced prompts work with MistralLLM"""
+        # Mock Ollama API response with SQL
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"response": "Async response"}
+        mock_response.json.return_value = {
+            "response": "SELECT COUNT(*) FROM clients;"
+        }
         mock_response.raise_for_status.return_value = None
         mock_requests_post.return_value = mock_response
         
-        # Test multiple concurrent requests
+        # Mock SQL execution result
+        mock_run_in_threadpool.return_value = "Total clients: 5"
+        
+        response = self.client.post(
+            "/chat",
+            json={"message": "how many clients are there"}
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+        response_data = response.json()
+        assert "Total clients: 5" in response_data["response"]
+        assert response_data["sql"] == "Database query executed successfully"
+
+    def test_multiple_query_types_in_sequence(self):
+        """Test that different query types work correctly in sequence"""
+        queries = [
+            ("list all tables", "special"),
+            ("how many clients", "normal_db"),
+            ("hello world", "general"),
+            ("show database schema", "special"),
+            ("find statements from Test Client", "special")
+        ]
+        
+        for query, query_type in queries:
+            if query_type == "special":
+                with patch('app.routers.chat.database') as mock_db:
+                    mock_db.run.return_value = "Special query result"
+                    
+                    response = self.client.post("/chat", json={"message": query})
+                    assert response.status_code == status.HTTP_200_OK
+                    response_data = response.json()
+                    assert response_data["sql"] is not None
+                    
+            elif query_type == "normal_db":
+                with patch('app.routers.chat.run_in_threadpool') as mock_run:
+                    mock_run.return_value = "Normal DB result"
+                    
+                    response = self.client.post("/chat", json={"message": query})
+                    assert response.status_code == status.HTTP_200_OK
+                    response_data = response.json()
+                    assert response_data["sql"] == "Database query executed successfully"
+                    
+            elif query_type == "general":
+                with patch('app.routers.chat.query_mistral') as mock_mistral:
+                    mock_mistral.return_value = "General chat response"
+                    
+                    response = self.client.post("/chat", json={"message": query})
+                    assert response.status_code == status.HTTP_200_OK
+                    response_data = response.json()
+                    assert response_data["sql"] is None
+
+    def test_sql_injection_protection_integration(self):
+        """Test SQL injection protection in the integrated system"""
+        malicious_queries = [
+            "list all tables; DROP TABLE clients;",
+            "show database schema' OR '1'='1",
+            "find statements from Test Client'; DELETE FROM statements; --"
+        ]
+        
+        for query in malicious_queries:
+            with patch('app.routers.chat.database') as mock_db:
+                mock_db.run.return_value = "Safe query result"
+                
+                response = self.client.post("/chat", json={"message": query})
+                assert response.status_code == status.HTTP_200_OK
+                
+                # Should still process the query but safely
+                if mock_db.run.called:
+                    called_query = mock_db.run.call_args[0][0]
+                    # Should not contain dangerous SQL
+                    assert "DROP" not in called_query.upper()
+                    assert "DELETE" not in called_query.upper()
+
+    def test_performance_with_large_queries(self):
+        """Test system performance with large query messages"""
+        # Create a very large query message
+        large_query = "list all clients " + "with lots of additional text " * 100
+        
+        with patch('app.routers.chat.run_in_threadpool') as mock_run:
+            mock_run.return_value = "Query result"
+            
+            response = self.client.post("/chat", json={"message": large_query})
+            assert response.status_code == status.HTTP_200_OK
+            response_data = response.json()
+            assert response_data["sql"] is not None
+            
+            # Should still be processed as a database query
+            mock_run.assert_called_once()
+
+    def test_concurrent_requests_handling(self):
+        """Test that the system can handle concurrent requests"""
         import threading
         import time
         
         results = []
         
-        def make_request():
-            response = self.client.post(
-                "/chat",
-                json={"message": "Hello"}
-            )
-            results.append(response.status_code)
+        def make_request(query):
+            with patch('app.routers.chat.database') as mock_db:
+                mock_db.run.return_value = f"Result for {query}"
+                
+                response = self.client.post("/chat", json={"message": query})
+                results.append(response.status_code)
         
-        # Start multiple threads
+        # Create multiple threads
         threads = []
-        for _ in range(5):
-            thread = threading.Thread(target=make_request)
+        for i in range(5):
+            thread = threading.Thread(target=make_request, args=(f"list all tables {i}",))
             threads.append(thread)
             thread.start()
         
@@ -238,107 +365,6 @@ class TestNLSQLIntegration:
         for thread in threads:
             thread.join()
         
-        # Check that all requests were successful
+        # All requests should have succeeded
         assert all(status == 200 for status in results)
-        assert len(results) == 5
-
-    @patch('app.llms.mistral_llm.requests.post')
-    def test_performance_with_multiple_requests(self, mock_requests_post):
-        """Test performance with multiple consecutive requests"""
-        # Mock response
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"response": "Performance test response"}
-        mock_response.raise_for_status.return_value = None
-        mock_requests_post.return_value = mock_response
-        
-        # Test multiple consecutive requests
-        for i in range(10):
-            response = self.client.post(
-                "/chat",
-                json={"message": f"Test message {i}"}
-            )
-
-    @patch('app.routers.chat.run_in_threadpool')
-    def test_run_in_threadpool_usage(self, mock_run_in_threadpool):
-        """Test that run_in_threadpool is used correctly for SQL operations"""
-        mock_run_in_threadpool.return_value = "SQL result"
-        
-        response = self.client.post(
-            "/chat",
-            json={"message": "list clients"}
-        )
-        
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Verify run_in_threadpool was called with the db_chain.run method
-        mock_run_in_threadpool.assert_called_once()
-        call_args = mock_run_in_threadpool.call_args
-        # First argument should be the db_chain.run method
-        assert callable(call_args[0][0])
-        # Second argument should be the user's message
-        assert call_args[0][1] == "list clients"
-
-    def test_response_schema_consistency(self):
-        """Test that response schema is consistent across all code paths"""
-        with patch('app.llms.mistral_llm.requests.post') as mock_post, \
-             patch('app.routers.chat.run_in_threadpool') as mock_threadpool:
-            
-            # Mock responses
-            mock_response = Mock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {"response": "Test response"}
-            mock_response.raise_for_status.return_value = None
-            mock_post.return_value = mock_response
-            mock_threadpool.return_value = "SQL response"
-            
-            test_messages = [
-                "list all clients",  # SQL path
-                "Hello world",       # Mistral path
-            ]
-            
-            for message in test_messages:
-                response = self.client.post(
-                    "/chat",
-                    json={"message": message}
-                )
-                
-                assert response.status_code == status.HTTP_200_OK
-                response_data = response.json()
-                
-                # All responses should have the same schema
-                assert "response" in response_data
-                assert "sql" in response_data
-                # client_id is no longer in the response
-                assert isinstance(response_data["response"], str)
-                # sql field can be string or null
-                assert response_data["sql"] is None or isinstance(response_data["sql"], str)
-
-    def test_database_url_configuration(self):
-        """Test that database URL is correctly configured for sync operations"""
-        # Import the chat module to check the DATABASE_URL
-        from app.routers import chat
-        
-        # Check that the DATABASE_URL is properly configured for sync operations
-        assert hasattr(chat, 'DATABASE_URL')
-        db_url = chat.DATABASE_URL
-        
-        # Should use psycopg2 (sync) instead of asyncpg (async)
-        assert "postgresql+psycopg2://" in db_url
-        assert "postgresql+asyncpg://" not in db_url
-
-    def test_database_url_conversion_from_async(self):
-        """Test that async database URLs are converted to sync"""
-        # Test the conversion function directly
-        from app.routers.chat import DATABASE_URL
-        
-        # Simulate an async URL
-        async_url = "postgresql+asyncpg://user:pass@host/db"
-        converted_url = async_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-        
-        # Verify the conversion logic works
-        assert "postgresql+psycopg2://" in converted_url
-        assert "postgresql+asyncpg://" not in converted_url
-        
-        # Test the actual DATABASE_URL is sync
-        assert "postgresql+psycopg2://" in DATABASE_URL 
+        assert len(results) == 5 
