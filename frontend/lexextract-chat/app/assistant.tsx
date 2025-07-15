@@ -10,7 +10,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbP
 
 export const Assistant = () => {
   const runtime = useChatRuntime({
-    api: "http://localhost:8000/chat",
+    api: "/api/chat",
   });
 
   return (
@@ -25,13 +25,13 @@ export const Assistant = () => {
               <BreadcrumbList>
                 <BreadcrumbItem className="hidden md:block">
                   <BreadcrumbLink href="#">
-                    Build Your Own ChatGPT UX
+                    LexExtract
                   </BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator className="hidden md:block" />
                 <BreadcrumbItem>
                   <BreadcrumbPage>
-                    Starter Template
+                    Chat Interface
                   </BreadcrumbPage>
                 </BreadcrumbItem>
               </BreadcrumbList>
