@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Github, MessagesSquare, Users } from "lucide-react"
+import { Github, MessagesSquare, Users, FileText } from "lucide-react"
 import Link from "next/link"
 import {
   Sidebar,
@@ -39,6 +39,14 @@ export function NavSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <Link href="/clients">
                 <Users className="size-4" />
                 Clients
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild>
+              <Link href="/statements">
+                <FileText className="size-4" />
+                Statements
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
