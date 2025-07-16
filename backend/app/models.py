@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Date, Numeric, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Date, Numeric, Text, CheckConstraint
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -23,6 +23,12 @@ class Statement(Base):
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     file_path = Column(String, nullable=False)
     ocr_text = Column(Text, nullable=True)  # Store extracted OCR text
+    progress = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default='pending')
+    
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'processing', 'completed', 'failed')", name='check_statement_status'),
+    )
     
     client = relationship("Client", backref="statements")
 

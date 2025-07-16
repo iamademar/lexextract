@@ -198,8 +198,10 @@ async def upload_statement(
 # Add your API routes here as you develop them
 from .routers import chat
 from .routers.clients import router as clients_router
+from .routers.statements import router as statements_router
 app.include_router(chat.router, tags=["chat"])
 app.include_router(clients_router, prefix="/clients", tags=["clients"])
+app.include_router(statements_router, prefix="/statements", tags=["statements"])
 # from .routes import auth, upload, history
 # app.include_router(auth.router, prefix="/auth", tags=["auth"])
 # app.include_router(upload.router, prefix="/upload", tags=["upload"])
